@@ -1,0 +1,18 @@
+
+{
+  "tiers": {
+    "hot": {
+      "bucket": "hot-data",
+      "max_age_days": 7
+    },
+    "warm": {
+      "bucket": "warm-data",
+      "max_age_days": 30
+    },
+    "cold": {
+      "bucket": "cold-data",
+      "max_age_days": null
+    }
+  },
+  "dry_run": true
+}

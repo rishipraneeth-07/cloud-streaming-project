@@ -1,9 +1,11 @@
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
 from minio import Minio
+from minio.commonconfig import CopySource
 
 from src.tiering.policy import get_target_tier, load_tiering_rules
 
@@ -28,8 +30,8 @@ def save_object_metadata(metadata):
 
 
 def create_minio_client():
-    access_key = __import__("os").environ.get("MINIO_ACCESS_KEY")
-    secret_key = __import__("os").environ.get("MINIO_SECRET_KEY")
+    access_key = os.environ.get("MINIO_ACCESS_KEY")
+    secret_key = os.environ.get("MINIO_SECRET_KEY")
 
     if not access_key or not secret_key:
         raise RuntimeError(
@@ -51,7 +53,8 @@ def calculate_age_days(original_created_at):
         created_at = created_at.replace(tzinfo=timezone.utc)
 
     age_seconds = (
-        datetime.now(timezone.utc) - created_at.astimezone(timezone.utc)
+        datetime.now(timezone.utc)
+        - created_at.astimezone(timezone.utc)
     ).total_seconds()
 
     if age_seconds < 0:
@@ -60,9 +63,36 @@ def calculate_age_days(original_created_at):
     return age_seconds / 86400
 
 
+def migrate_object(client, source_bucket, object_name, target_bucket):
+    source = client.stat_object(source_bucket, object_name)
+
+    client.copy_object(
+        target_bucket,
+        object_name,
+        CopySource(source_bucket, object_name),
+    )
+
+    destination = client.stat_object(target_bucket, object_name)
+
+    if destination.size != source.size:
+        raise RuntimeError(
+            f"Size verification failed for {object_name}; "
+            "source object was preserved"
+        )
+
+    client.remove_object(source_bucket, object_name)
+
+    print(
+        f"MIGRATED {source_bucket}/{object_name} "
+        f"-> {target_bucket}/{object_name}"
+    )
+
+
 def preview_tiering():
     client = create_minio_client()
-    rules = load_tiering_rules()
+    config = load_tiering_rules()
+    rules = config["tiers"]
+    dry_run = config.get("dry_run", True)
     metadata = load_object_metadata()
 
     tier_to_bucket = {
@@ -83,8 +113,8 @@ def preview_tiering():
 
             if record is None:
                 print(
-                    f"SKIP {key}: original creation time is unknown; "
-                    "record it before making a tiering decision"
+                    f"SKIP {source_bucket}/{key}: "
+                    "original creation time is unknown"
                 )
                 continue
 
@@ -94,16 +124,25 @@ def preview_tiering():
 
             if target_bucket == source_bucket:
                 print(
-                    f"KEEP {key}: age={age_days:.2f} days, "
+                    f"KEEP {source_bucket}/{key}: "
+                    f"age={age_days:.2f} days, "
                     f"tier={target_tier.upper()}"
                 )
-            else:
+                continue
+
+            if dry_run:
                 print(
-                    f"WOULD MOVE {key} -> {target_bucket}: "
-                    f"age={age_days:.2f} days, "
-                    f"target={target_tier.upper()}"
+                    f"DRY RUN: WOULD MOVE {source_bucket}/{key} "
+                    f"-> {target_bucket}: age={age_days:.2f} days"
                 )
+                continue
+
+            print(
+                f"MIGRATION DISABLED FOR {source_bucket}/{key}: "
+                "metadata-safe migration is not implemented yet"
+            )
 
 
 if __name__ == "__main__":
     preview_tiering()
+

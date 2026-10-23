@@ -8,7 +8,7 @@ class TestTieringPolicy(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.rules = load_tiering_rules()
+        cls.rules = load_tiering_rules()["tiers"]
 
     def test_hot_tier(self):
         self.assertEqual(get_target_tier(0, self.rules), "hot")

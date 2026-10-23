@@ -1,0 +1,8 @@
+{
+  "batch/product_summary/part-00000-16c39361-cb60-4c5c-88dc-03096128f62f-c000.snappy.parquet": {
+    "original_created_at": "2026-10-23T00:00:00+00:00"
+  },
+  "batch/orders/part-00000-99ec7d75-e5fb-4f4c-8429-9ce144f90af0-c000.snappy.parquet": {
+    "original_created_at": "2026-10-23T00:00:00+00:00"
+  }
+}

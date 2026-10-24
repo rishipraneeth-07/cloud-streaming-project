@@ -29,6 +29,8 @@ data/processed/
 data/output/
 spark-warehouse/
 metastore_db/
+data/streaming/
+data/checkpoints/
 
 # OS files
 .DS_Store

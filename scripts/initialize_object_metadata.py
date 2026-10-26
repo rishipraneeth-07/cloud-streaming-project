@@ -23,7 +23,7 @@ def create_minio_client():
         )
 
     return Minio(
-        "localhost:9000",
+        os.getenv("MINIO_ENDPOINT", "http://localhost:9000").replace("http://", "").replace("https://", ""),
         access_key=access_key,
         secret_key=secret_key,
         secure=False,

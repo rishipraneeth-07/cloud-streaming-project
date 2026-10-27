@@ -1,35 +1,18 @@
 
 import hashlib
-import json
 import os
 from datetime import datetime, timezone
-from pathlib import Path
 
 from minio import Minio
 from minio.commonconfig import CopySource
 from minio.error import S3Error
 
+from src.tiering.metadata import (
+    complete_metadata_migration,
+    load_object_metadata,
+    preserve_object_metadata,
+)
 from src.tiering.policy import load_tiering_rules, get_target_tier
-
-
-ROOT_DIR = Path(__file__).resolve().parents[2]
-METADATA_FILE = ROOT_DIR / "config" / "object_metadata.json"
-
-
-def load_object_metadata():
-    if not METADATA_FILE.exists():
-        return {}
-
-    with open(METADATA_FILE, "r", encoding="utf-8") as file:
-        return json.load(file)
-
-
-def save_object_metadata(metadata):
-    METADATA_FILE.parent.mkdir(parents=True, exist_ok=True)
-
-    with open(METADATA_FILE, "w", encoding="utf-8") as file:
-        json.dump(metadata, file, indent=2)
-        file.write("\n")
 
 
 def create_minio_client():
@@ -41,10 +24,7 @@ def create_minio_client():
             "MINIO_ACCESS_KEY and MINIO_SECRET_KEY must be set"
         )
 
-    endpoint = os.getenv(
-        "MINIO_ENDPOINT",
-        "http://localhost:9000",
-    )
+    endpoint = os.getenv("MINIO_ENDPOINT", "http://localhost:9000")
     endpoint = endpoint.replace("http://", "").replace("https://", "")
 
     return Minio(
@@ -62,7 +42,8 @@ def calculate_age_days(original_created_at):
         created_at = created_at.replace(tzinfo=timezone.utc)
 
     age_days = (
-        datetime.now(timezone.utc) - created_at.astimezone(timezone.utc)
+        datetime.now(timezone.utc)
+        - created_at.astimezone(timezone.utc)
     ).total_seconds() / 86400
 
     if age_days < 0:
@@ -86,7 +67,6 @@ def calculate_object_sha256(client, bucket_name, object_name):
         response.release_conn()
 
 
-
 def destination_exists(client, bucket_name, object_name):
     try:
         client.stat_object(bucket_name, object_name)
@@ -106,11 +86,14 @@ def migrate_object(client, source_bucket, object_name, target_bucket):
     if source_bucket == target_bucket:
         raise ValueError("Source and destination buckets must differ")
 
+    source_key = f"{source_bucket}/{object_name}"
+    destination_key = f"{target_bucket}/{object_name}"
+
     source_stat = client.stat_object(source_bucket, object_name)
 
     if destination_exists(client, target_bucket, object_name):
         raise FileExistsError(
-            f"Destination already exists: {target_bucket}/{object_name}"
+            f"Destination already exists: {destination_key}"
         )
 
     client.copy_object(
@@ -119,36 +102,70 @@ def migrate_object(client, source_bucket, object_name, target_bucket):
         CopySource(source_bucket, object_name),
     )
 
-    destination_stat = client.stat_object(target_bucket, object_name)
+    # Track which stage has been reached so cleanup never deletes
+    # the destination after source deletion has started.
+    metadata_preservation_started = False
+    source_removal_started = False
 
-    if source_stat.size != destination_stat.size:
-        client.remove_object(target_bucket, object_name)
-        raise RuntimeError(
-            "Migration verification failed: object sizes do not match"
+    try:
+        destination_stat = client.stat_object(
+            target_bucket,
+            object_name,
         )
 
-    source_hash = calculate_object_sha256(
-        client,
-        source_bucket,
-        object_name,
-    )
-    destination_hash = calculate_object_sha256(
-        client,
-        target_bucket,
-        object_name,
-    )
+        if source_stat.size != destination_stat.size:
+            raise RuntimeError(
+                "Migration verification failed: object sizes do not match"
+            )
 
-    if source_hash != destination_hash:
-        client.remove_object(target_bucket, object_name)
-        raise RuntimeError(
-            "Migration verification failed: SHA-256 checksums do not match"
+        source_hash = calculate_object_sha256(
+            client,
+            source_bucket,
+            object_name,
+        )
+        destination_hash = calculate_object_sha256(
+            client,
+            target_bucket,
+            object_name,
         )
 
-    client.remove_object(source_bucket, object_name)
+        if source_hash != destination_hash:
+            raise RuntimeError(
+                "Migration verification failed: SHA-256 checksums "
+                "do not match"
+            )
+
+        # Preserve metadata before attempting source deletion.
+        # If this stage fails, retain both object copies rather than
+        # risk deleting data while metadata state is uncertain.
+        metadata_preservation_started = True
+
+        preserve_object_metadata(source_key, destination_key)
+
+        # Once source deletion starts, never automatically delete
+        # the destination in an exception handler.
+        source_removal_started = True
+        client.remove_object(source_bucket, object_name)
+
+        # Remove the old metadata key only after source deletion succeeds.
+        complete_metadata_migration(source_key, destination_key)
+
+    except Exception:
+        # Cleanup is permitted only before metadata preservation starts
+        # and before source deletion is attempted.
+        if not metadata_preservation_started and not source_removal_started:
+            try:
+                client.remove_object(target_bucket, object_name)
+            except Exception as cleanup_error:
+                print(
+                    "WARNING: Destination cleanup failed. "
+                    f"Both copies may remain: {cleanup_error}"
+                )
+
+        raise
 
     print(
-        f"MIGRATED {source_bucket}/{object_name} "
-        f"-> {target_bucket}/{object_name}"
+        f"MIGRATED {source_key} -> {destination_key}"
     )
 
 
@@ -157,12 +174,13 @@ def preview_tiering():
     config = load_tiering_rules()
     rules = config["tiers"]
     dry_run = config.get("dry_run", True)
-    metadata = load_object_metadata()
 
     tier_to_bucket = {
         tier: details["bucket"]
         for tier, details in rules.items()
     }
+
+    metadata = load_object_metadata()
 
     for source_tier in ("hot", "warm", "cold"):
         source_bucket = tier_to_bucket[source_tier]
@@ -172,20 +190,20 @@ def preview_tiering():
             continue
 
         for obj in client.list_objects(source_bucket, recursive=True):
-            key = obj.object_name
-            record = metadata.get(key)
+            object_name = obj.object_name
+            source_key = f"{source_bucket}/{object_name}"
+            record = metadata.get(source_key)
 
             if record is None:
                 print(
-                    f"SKIP {source_bucket}/{key}: "
-                    "original creation time is unknown"
+                    f"SKIP {source_key}: metadata record is missing"
                 )
                 continue
 
             if record.get("timestamp_is_original_creation_time") is not True:
                 print(
-                    f"SKIP {source_bucket}/{key}: "
-                    "original creation time is not confirmed"
+                    f"SKIP {source_key}: original creation time "
+                    "is not confirmed"
                 )
                 continue
 
@@ -194,32 +212,35 @@ def preview_tiering():
                     record["original_created_at"]
                 )
                 target_tier = get_target_tier(age_days, rules)
+                target_bucket = tier_to_bucket[target_tier]
             except (KeyError, TypeError, ValueError) as error:
-                print(f"SKIP {source_bucket}/{key}: {error}")
+                print(f"SKIP {source_key}: {error}")
                 continue
-
-            target_bucket = tier_to_bucket[target_tier]
 
             if target_bucket == source_bucket:
                 print(
-                    f"KEEP {source_bucket}/{key}: "
-                    f"age={age_days:.2f} days, "
+                    f"KEEP {source_key}: age={age_days:.2f} days, "
                     f"tier={target_tier.upper()}"
                 )
                 continue
 
             if dry_run:
                 print(
-                    f"DRY RUN: WOULD MOVE {source_bucket}/{key} "
-                    f"-> {target_bucket}: age={age_days:.2f} days"
+                    f"DRY RUN: WOULD MOVE {source_key} "
+                    f"-> {target_bucket}/{object_name}: "
+                    f"age={age_days:.2f} days"
                 )
                 continue
 
-            print(
-                f"MIGRATION DISABLED FOR {source_bucket}/{key}: "
-                "metadata-safe migration is not implemented yet"
-            )
-
+            try:
+                migrate_object(
+                    client,
+                    source_bucket,
+                    object_name,
+                    target_bucket,
+                )
+            except Exception as error:
+                print(f"MIGRATION FAILED for {source_key}: {error}")
 
 
 if __name__ == "__main__":

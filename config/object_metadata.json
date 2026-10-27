@@ -1,28 +1,82 @@
 {
-  "batch/product_summary/part-00000-16c39361-cb60-4c5c-88dc-03096128f62f-c000.snappy.parquet": {
+  "hot-data/batch/product_summary/part-00000-16c39361-cb60-4c5c-88dc-03096128f62f-c000.snappy.parquet": {
     "original_created_at": "2026-10-23T00:00:00+00:00"
   },
-  "batch/orders/part-00000-99ec7d75-e5fb-4f4c-8429-9ce144f90af0-c000.snappy.parquet": {
+  "warm-data/batch/orders/part-00000-99ec7d75-e5fb-4f4c-8429-9ce144f90af0-c000.snappy.parquet": {
     "original_created_at": "2026-10-23T00:00:00+00:00"
   },
-  "streaming/orders/part-00000-366b1edc-0731-4b4e-94a8-37137c4a0c29-c000.snappy.parquet": {
+  "hot-data/streaming/orders/part-00000-366b1edc-0731-4b4e-94a8-37137c4a0c29-c000.snappy.parquet": {
     "original_created_at": "2026-10-24T10:08:49.904000+00:00",
     "timestamp_source": "minio_last_modified",
     "timestamp_is_original_creation_time": false
   },
-  "streaming/orders/part-00000-75946ec0-9363-4d71-9996-44b2a1af51a1-c000.snappy.parquet": {
+  "hot-data/streaming/orders/part-00000-75946ec0-9363-4d71-9996-44b2a1af51a1-c000.snappy.parquet": {
     "original_created_at": "2026-10-24T10:08:49.927000+00:00",
     "timestamp_source": "minio_last_modified",
     "timestamp_is_original_creation_time": false
   },
-  "streaming/orders/part-00000-a0af5ebd-1b10-42dd-b58b-129852ad89c3-c000.snappy.parquet": {
+  "hot-data/streaming/orders/part-00000-a0af5ebd-1b10-42dd-b58b-129852ad89c3-c000.snappy.parquet": {
     "original_created_at": "2026-10-24T10:08:49.918000+00:00",
     "timestamp_source": "minio_last_modified",
     "timestamp_is_original_creation_time": false
   },
-  "streaming/orders/part-00000-b069bf95-ae57-447a-8dfb-8368597daf2e-c000.snappy.parquet": {
+  "hot-data/streaming/orders/part-00000-b069bf95-ae57-447a-8dfb-8368597daf2e-c000.snappy.parquet": {
     "original_created_at": "2026-10-24T10:08:49.922000+00:00",
     "timestamp_source": "minio_last_modified",
     "timestamp_is_original_creation_time": false
+  },
+  "hot-data/batch/orders/part-00000-99ec7d75-e5fb-4f4c-8429-9ce144f90af0-c000.snappy.parquet": {
+    "original_created_at": "2026-10-27T16:51:31.657135+00:00",
+    "timestamp_source": "pipeline_creation",
+    "timestamp_is_original_creation_time": true,
+    "registered_at": "2026-10-27T16:51:31.661873+00:00"
+  },
+  "hot-data/batch/orders/98af82c49cef48cfa51f74981d7a6527/part-00000-99ec7d75-e5fb-4f4c-8429-9ce144f90af0-c000.snappy.parquet": {
+    "original_created_at": "2026-10-27T16:58:00.369658+00:00",
+    "timestamp_source": "pipeline_creation",
+    "timestamp_is_original_creation_time": true,
+    "registered_at": "2026-10-27T16:58:00.387985+00:00"
+  },
+  "hot-data/batch/product_summary/ab89e45d9e934c0ebac3c7cdf9b746ac/part-00000-16c39361-cb60-4c5c-88dc-03096128f62f-c000.snappy.parquet": {
+    "original_created_at": "2026-10-27T16:58:00.388457+00:00",
+    "timestamp_source": "pipeline_creation",
+    "timestamp_is_original_creation_time": true,
+    "registered_at": "2026-10-27T16:58:00.395188+00:00"
+  },
+  "hot-data/batch/orders/part-00000-853ef3b2-209d-4441-a14e-dc7556977153-c000.snappy.parquet": {
+    "original_created_at": "2026-10-27T16:58:52.350539+00:00",
+    "timestamp_source": "pipeline_creation",
+    "timestamp_is_original_creation_time": true,
+    "registered_at": "2026-10-27T16:58:52.673244+00:00"
+  },
+  "hot-data/batch/product_summary/part-00000-f2c62545-ccc8-46eb-adf8-11921fe601ce-c000.snappy.parquet": {
+    "original_created_at": "2026-10-27T16:58:52.672416+00:00",
+    "timestamp_source": "pipeline_creation",
+    "timestamp_is_original_creation_time": true,
+    "registered_at": "2026-10-27T16:58:52.674198+00:00"
+  },
+  "hot-data/batch/orders/part-00000-566ec5f8-fa9f-48bb-b2fe-dd79a9dc99ef-c000.snappy.parquet": {
+    "original_created_at": "2026-10-27T16:59:25.187946+00:00",
+    "timestamp_source": "pipeline_creation",
+    "timestamp_is_original_creation_time": true,
+    "registered_at": "2026-10-27T16:59:25.523020+00:00"
+  },
+  "hot-data/batch/product_summary/part-00000-62927c25-8667-4cbf-9c0e-5cc7c516e648-c000.snappy.parquet": {
+    "original_created_at": "2026-10-27T16:59:25.522345+00:00",
+    "timestamp_source": "pipeline_creation",
+    "timestamp_is_original_creation_time": true,
+    "registered_at": "2026-10-27T16:59:25.523706+00:00"
+  },
+  "hot-data/batch/orders/6f239e9ccc594528aca110cdce39e445/part-00000-566ec5f8-fa9f-48bb-b2fe-dd79a9dc99ef-c000.snappy.parquet": {
+    "original_created_at": "2026-10-27T16:59:26.926506+00:00",
+    "timestamp_source": "pipeline_creation",
+    "timestamp_is_original_creation_time": true,
+    "registered_at": "2026-10-27T16:59:26.943714+00:00"
+  },
+  "hot-data/batch/product_summary/db3b165dc6354691a2f801a3f9df232c/part-00000-62927c25-8667-4cbf-9c0e-5cc7c516e648-c000.snappy.parquet": {
+    "original_created_at": "2026-10-27T16:59:26.944188+00:00",
+    "timestamp_source": "pipeline_creation",
+    "timestamp_is_original_creation_time": true,
+    "registered_at": "2026-10-27T16:59:26.950821+00:00"
   }
 }

@@ -182,11 +182,10 @@ def preview_tiering():
                 )
                 continue
 
-            if record.get("timestamp_is_original_creation_time") is False:
+            if record.get("timestamp_is_original_creation_time") is not True:
                 print(
                     f"SKIP {source_bucket}/{key}: "
-                    "timestamp is estimated, not the confirmed "
-                    "original creation time"
+                    "original creation time is not confirmed"
                 )
                 continue
 
@@ -220,6 +219,7 @@ def preview_tiering():
                 f"MIGRATION DISABLED FOR {source_bucket}/{key}: "
                 "metadata-safe migration is not implemented yet"
             )
+
 
 
 if __name__ == "__main__":

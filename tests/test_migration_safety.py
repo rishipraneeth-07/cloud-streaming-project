@@ -27,9 +27,9 @@ class TestMigrationSafety(unittest.TestCase):
         self.client = Mock()
 
         self.client.stat_object.side_effect = [
-            Mock(size=100),              # Original source
-            self.missing_object_error(), # Destination doesn't exist
-            Mock(size=100),              # Copied destination
+            Mock(size=100),
+            self.missing_object_error(),
+            Mock(size=100),
         ]
 
         self.client.get_object.side_effect = [
@@ -40,6 +40,7 @@ class TestMigrationSafety(unittest.TestCase):
     @staticmethod
     def missing_object_error():
         return S3Error(
+            Mock(),
             "NoSuchKey",
             "Object does not exist",
             "/warm-data/example.parquet",
@@ -59,7 +60,6 @@ class TestMigrationSafety(unittest.TestCase):
 
         self.client.copy_object.assert_called_once()
         self.assertEqual(self.client.get_object.call_count, 2)
-
         self.client.remove_object.assert_called_once_with(
             "hot-data",
             "example.parquet",
@@ -136,4 +136,5 @@ class TestMigrationSafety(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 

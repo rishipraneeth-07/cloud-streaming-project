@@ -9,7 +9,7 @@ from minio import Minio
 from minio.commonconfig import CopySource
 from minio.error import S3Error
 
-from src.tiering.policy import get_target_tier, load_tiering_rules
+from src.tiering.policy import load_tiering_rules, get_target_tier
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -38,11 +38,17 @@ def create_minio_client():
 
     if not access_key or not secret_key:
         raise RuntimeError(
-            "Set MINIO_ACCESS_KEY and MINIO_SECRET_KEY environment variables"
+            "MINIO_ACCESS_KEY and MINIO_SECRET_KEY must be set"
         )
 
+    endpoint = os.getenv(
+        "MINIO_ENDPOINT",
+        "http://localhost:9000",
+    )
+    endpoint = endpoint.replace("http://", "").replace("https://", "")
+
     return Minio(
-        os.getenv("MINIO_ENDPOINT", "http://localhost:9000").replace("http://", "").replace("https://", ""),
+        endpoint,
         access_key=access_key,
         secret_key=secret_key,
         secure=False,
@@ -55,28 +61,30 @@ def calculate_age_days(original_created_at):
     if created_at.tzinfo is None:
         created_at = created_at.replace(tzinfo=timezone.utc)
 
-    now = datetime.now(timezone.utc)
-    age_seconds = (now - created_at.astimezone(timezone.utc)).total_seconds()
+    age_days = (
+        datetime.now(timezone.utc) - created_at.astimezone(timezone.utc)
+    ).total_seconds() / 86400
 
-    if age_seconds < 0:
-        raise ValueError("Object creation timestamp cannot be in the future")
+    if age_days < 0:
+        raise ValueError("Creation timestamp is in the future")
 
-    return age_seconds / 86400
+    return age_days
 
 
 def calculate_object_sha256(client, bucket_name, object_name):
     response = client.get_object(bucket_name, object_name)
 
     try:
-        digest = hashlib.sha256()
+        sha256 = hashlib.sha256()
 
         for chunk in response.stream(1024 * 1024):
-            digest.update(chunk)
+            sha256.update(chunk)
 
-        return digest.hexdigest()
+        return sha256.hexdigest()
     finally:
         response.close()
         response.release_conn()
+
 
 
 def destination_exists(client, bucket_name, object_name):
@@ -84,17 +92,13 @@ def destination_exists(client, bucket_name, object_name):
         client.stat_object(bucket_name, object_name)
         return True
     except S3Error as error:
-        # Standard MinIO/S3 missing-object error codes.
-        missing_codes = {
+        if error.code in (
             "NoSuchKey",
             "NoSuchObject",
+            "NoSuchBucket",
             "NotFound",
-        }
-
-        # Also tolerate the nonstandard code currently used by the old test.
-        if error.code in missing_codes or error.code == "Object does not exist":
+        ):
             return False
-
         raise
 
 
@@ -102,7 +106,7 @@ def migrate_object(client, source_bucket, object_name, target_bucket):
     if source_bucket == target_bucket:
         raise ValueError("Source and destination buckets must differ")
 
-    source = client.stat_object(source_bucket, object_name)
+    source_stat = client.stat_object(source_bucket, object_name)
 
     if destination_exists(client, target_bucket, object_name):
         raise FileExistsError(
@@ -115,38 +119,31 @@ def migrate_object(client, source_bucket, object_name, target_bucket):
         CopySource(source_bucket, object_name),
     )
 
-    try:
-        destination = client.stat_object(target_bucket, object_name)
+    destination_stat = client.stat_object(target_bucket, object_name)
 
-        if destination.size != source.size:
-            raise RuntimeError(
-                f"Size verification failed for {object_name}"
-            )
-
-        source_hash = calculate_object_sha256(
-            client, source_bucket, object_name
-        )
-        destination_hash = calculate_object_sha256(
-            client, target_bucket, object_name
+    if source_stat.size != destination_stat.size:
+        client.remove_object(target_bucket, object_name)
+        raise RuntimeError(
+            "Migration verification failed: object sizes do not match"
         )
 
-        if source_hash != destination_hash:
-            raise RuntimeError(
-                f"SHA-256 verification failed for {object_name}"
-            )
+    source_hash = calculate_object_sha256(
+        client,
+        source_bucket,
+        object_name,
+    )
+    destination_hash = calculate_object_sha256(
+        client,
+        target_bucket,
+        object_name,
+    )
 
-    except Exception:
-        # Only the destination created by this attempt is eligible for cleanup.
-        try:
-            client.remove_object(target_bucket, object_name)
-        except Exception as cleanup_error:
-            print(
-                f"WARNING: Could not clean up "
-                f"{target_bucket}/{object_name}: {cleanup_error}"
-            )
-        raise
+    if source_hash != destination_hash:
+        client.remove_object(target_bucket, object_name)
+        raise RuntimeError(
+            "Migration verification failed: SHA-256 checksums do not match"
+        )
 
-    # Preserve the source until all verification has succeeded.
     client.remove_object(source_bucket, object_name)
 
     print(
@@ -182,6 +179,14 @@ def preview_tiering():
                 print(
                     f"SKIP {source_bucket}/{key}: "
                     "original creation time is unknown"
+                )
+                continue
+
+            if record.get("timestamp_is_original_creation_time") is False:
+                print(
+                    f"SKIP {source_bucket}/{key}: "
+                    "timestamp is estimated, not the confirmed "
+                    "original creation time"
                 )
                 continue
 

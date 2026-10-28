@@ -1,7 +1,7 @@
 
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -54,6 +54,21 @@ class TestObjectMetadata(unittest.TestCase):
         self.assertEqual(
             datetime.fromisoformat(record["original_created_at"]),
             datetime.fromisoformat(timestamp),
+        )
+
+    def test_non_pipeline_timestamp_is_not_confirmed(self):
+        record = metadata_module.register_object(
+            "streaming/example.parquet",
+            original_created_at="2026-10-28T10:00:00+00:00",
+            timestamp_source="minio_last_modified",
+        )
+
+        self.assertFalse(
+            record["timestamp_is_original_creation_time"]
+        )
+        self.assertEqual(
+            record["timestamp_source"],
+            "minio_last_modified",
         )
 
     def test_registration_does_not_overwrite_confirmed_timestamp(self):
@@ -121,3 +136,4 @@ class TestObjectMetadata(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

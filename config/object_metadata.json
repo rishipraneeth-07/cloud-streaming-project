@@ -6,24 +6,28 @@
     "original_created_at": "2026-10-23T00:00:00+00:00"
   },
   "hot-data/streaming/orders/part-00000-366b1edc-0731-4b4e-94a8-37137c4a0c29-c000.snappy.parquet": {
-    "original_created_at": "2026-10-24T10:08:49.904000+00:00",
-    "timestamp_source": "minio_last_modified",
-    "timestamp_is_original_creation_time": false
+    "original_created_at": "2026-10-28T16:13:38.816423+00:00",
+    "timestamp_source": "registration_time_estimate",
+    "timestamp_is_original_creation_time": false,
+    "registered_at": "2026-10-28T16:13:38.816435+00:00"
   },
   "hot-data/streaming/orders/part-00000-75946ec0-9363-4d71-9996-44b2a1af51a1-c000.snappy.parquet": {
-    "original_created_at": "2026-10-24T10:08:49.927000+00:00",
-    "timestamp_source": "minio_last_modified",
-    "timestamp_is_original_creation_time": false
+    "original_created_at": "2026-10-28T16:13:38.849738+00:00",
+    "timestamp_source": "registration_time_estimate",
+    "timestamp_is_original_creation_time": false,
+    "registered_at": "2026-10-28T16:13:38.849761+00:00"
   },
   "hot-data/streaming/orders/part-00000-a0af5ebd-1b10-42dd-b58b-129852ad89c3-c000.snappy.parquet": {
-    "original_created_at": "2026-10-24T10:08:49.918000+00:00",
-    "timestamp_source": "minio_last_modified",
-    "timestamp_is_original_creation_time": false
+    "original_created_at": "2026-10-28T16:13:38.825588+00:00",
+    "timestamp_source": "registration_time_estimate",
+    "timestamp_is_original_creation_time": false,
+    "registered_at": "2026-10-28T16:13:38.825605+00:00"
   },
   "hot-data/streaming/orders/part-00000-b069bf95-ae57-447a-8dfb-8368597daf2e-c000.snappy.parquet": {
-    "original_created_at": "2026-10-24T10:08:49.922000+00:00",
-    "timestamp_source": "minio_last_modified",
-    "timestamp_is_original_creation_time": false
+    "original_created_at": "2026-10-28T16:13:38.837784+00:00",
+    "timestamp_source": "registration_time_estimate",
+    "timestamp_is_original_creation_time": false,
+    "registered_at": "2026-10-28T16:13:38.837804+00:00"
   },
   "hot-data/batch/orders/part-00000-99ec7d75-e5fb-4f4c-8429-9ce144f90af0-c000.snappy.parquet": {
     "original_created_at": "2026-10-27T16:51:31.657135+00:00",
@@ -78,5 +82,11 @@
     "timestamp_source": "pipeline_creation",
     "timestamp_is_original_creation_time": true,
     "registered_at": "2026-10-27T16:59:26.950821+00:00"
+  },
+  "hot-data/streaming/orders/part-00000-3ab750c6-d395-4bcd-9110-b3a8d092202e-c000.snappy.parquet": {
+    "original_created_at": "2026-10-28T16:13:38.865151+00:00",
+    "timestamp_source": "registration_time_estimate",
+    "timestamp_is_original_creation_time": false,
+    "registered_at": "2026-10-28T16:13:38.865193+00:00"
   }
 }

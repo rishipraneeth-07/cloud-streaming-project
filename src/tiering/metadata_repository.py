@@ -11,12 +11,22 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 
 def load_env_file():
     """Load missing environment variables from the project's .env file."""
+    required = ("POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD")
+
+    if all(os.environ.get(key) for key in required):
+        return
+
     env_file = ROOT_DIR / ".env"
 
     if not env_file.exists():
         return
 
-    for line in env_file.read_text(encoding="utf-8").splitlines():
+    try:
+        lines = env_file.read_text(encoding="utf-8").splitlines()
+    except PermissionError:
+        return
+
+    for line in lines:
         line = line.strip()
 
         if not line or line.startswith("#") or "=" not in line:
@@ -90,6 +100,45 @@ def get_metadata(object_key):
         "registered_at": _to_iso(row[3]),
         **({"last_moved_at": _to_iso(row[4])} if row[4] is not None else {}),
     }
+
+
+
+def list_metadata():
+    """Retrieve all object metadata as a dictionary keyed by object key."""
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    object_key,
+                    original_created_at,
+                    timestamp_source,
+                    timestamp_is_original_creation_time,
+                    registered_at,
+                    last_moved_at
+                FROM object_metadata
+                ORDER BY object_key
+                """
+            )
+            rows = cursor.fetchall()
+
+    metadata = {}
+
+    for row in rows:
+        record = {
+            "original_created_at": _to_iso(row[1]),
+            "timestamp_source": row[2],
+            "timestamp_is_original_creation_time": row[3],
+            "registered_at": _to_iso(row[4]),
+        }
+
+        if row[5] is not None:
+            record["last_moved_at"] = _to_iso(row[5])
+
+        metadata[row[0]] = record
+
+    return metadata
+
 
 
 def save_metadata(object_key, record):
@@ -180,3 +229,88 @@ def delete_metadata(object_key):
                 (object_key,),
             )
             return cursor.rowcount == 1
+
+
+
+def create_migration_record(
+    source_bucket,
+    source_key,
+    destination_bucket,
+    destination_key,
+):
+    """Create a migration history record with PENDING status."""
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO migration_history (
+                    source_bucket,
+                    source_key,
+                    destination_bucket,
+                    destination_key,
+                    status
+                )
+                VALUES (%s, %s, %s, %s, 'PENDING')
+                RETURNING id
+                """,
+                (
+                    source_bucket,
+                    source_key,
+                    destination_bucket,
+                    destination_key,
+                ),
+            )
+            return cursor.fetchone()[0]
+
+
+def update_migration_status(
+    migration_id,
+    status,
+    error_message=None,
+):
+    """Update migration status and completion timestamp."""
+    if status not in ("COMPLETED", "FAILED"):
+        raise ValueError("Invalid migration status")
+
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE migration_history
+                SET
+                    status = %s,
+                    completed_at = CURRENT_TIMESTAMP,
+                    error_message = %s
+                WHERE id = %s
+                """,
+                (status, error_message, migration_id),
+            )
+
+            if cursor.rowcount != 1:
+                raise KeyError(
+                    f"Migration record not found: {migration_id}"
+                )
+
+
+def list_migration_history():
+    """Retrieve migration history ordered by creation time."""
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    id,
+                    source_bucket,
+                    source_key,
+                    destination_bucket,
+                    destination_key,
+                    status,
+                    started_at,
+                    completed_at,
+                    error_message
+                FROM migration_history
+                ORDER BY id
+                """
+            )
+
+            return cursor.fetchall()

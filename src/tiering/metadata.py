@@ -1,37 +1,26 @@
 
-import json
 from datetime import datetime, timezone
-from pathlib import Path
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
-METADATA_FILE = ROOT_DIR / "config" / "object_metadata.json"
+from src.tiering.metadata_repository import (
+    delete_metadata,
+    get_metadata,
+    list_metadata,
+    save_metadata,
+)
 
 
 def load_object_metadata():
-    if not METADATA_FILE.exists():
-        return {}
-
-    with open(METADATA_FILE, "r", encoding="utf-8") as file:
-        metadata = json.load(file)
-
-    if not isinstance(metadata, dict):
-        raise ValueError("Object metadata must be a JSON object")
-
-    return metadata
+    """Load all object metadata from PostgreSQL."""
+    return list_metadata()
 
 
 def save_object_metadata(metadata):
+    """Save metadata records to PostgreSQL."""
     if not isinstance(metadata, dict):
         raise TypeError("Metadata must be a dictionary")
 
-    METADATA_FILE.parent.mkdir(parents=True, exist_ok=True)
-    temporary_file = METADATA_FILE.with_suffix(".json.tmp")
-
-    with open(temporary_file, "w", encoding="utf-8") as file:
-        json.dump(metadata, file, indent=2)
-        file.write("\n")
-
-    temporary_file.replace(METADATA_FILE)
+    for object_key, record in metadata.items():
+        save_metadata(object_key, record)
 
 
 def register_object(
@@ -39,11 +28,11 @@ def register_object(
     original_created_at=None,
     timestamp_source="unknown",
 ):
-    if not isinstance(object_key, str) or not object_key:
+    """Register an object without overwriting an existing confirmed timestamp."""
+    if not isinstance(object_key, str) or not object_key.strip():
         raise ValueError("Object key must be a non-empty string")
 
-    metadata = load_object_metadata()
-    existing = metadata.get(object_key, {})
+    existing = get_metadata(object_key) or {}
 
     if existing.get("timestamp_is_original_creation_time") is True:
         return existing
@@ -53,6 +42,9 @@ def register_object(
         confirmed = False
         source = "registration_time_estimate"
     else:
+        if not isinstance(original_created_at, str):
+            raise TypeError("Creation timestamp must be a string")
+
         parsed = datetime.fromisoformat(original_created_at)
 
         if parsed.tzinfo is None:
@@ -69,58 +61,76 @@ def register_object(
         "registered_at": datetime.now(timezone.utc).isoformat(),
     }
 
-    metadata[object_key] = record
-    save_object_metadata(metadata)
-
-    return record
+    save_metadata(object_key, record)
+    return get_metadata(object_key)
 
 
 def preserve_object_metadata(source_key, destination_key):
+    """Create destination metadata before the source metadata is removed."""
     if not source_key or not destination_key:
         raise ValueError("Source and destination keys are required")
 
     if source_key == destination_key:
         raise ValueError("Source and destination metadata keys must differ")
 
-    metadata = load_object_metadata()
+    source_record = get_metadata(source_key)
 
-    if source_key not in metadata:
+    if source_record is None:
         raise KeyError(f"No metadata exists for {source_key}")
 
-    if destination_key in metadata:
+    if get_metadata(destination_key) is not None:
         raise FileExistsError(
             f"Metadata already exists for {destination_key}"
         )
 
-    record = metadata[source_key].copy()
+    record = source_record.copy()
     record["last_moved_at"] = datetime.now(timezone.utc).isoformat()
 
-    metadata[destination_key] = record
-    save_object_metadata(metadata)
+    save_metadata(destination_key, record)
 
-    return record
+    saved_record = get_metadata(destination_key)
+
+    if saved_record is None:
+        raise RuntimeError(
+            f"Destination metadata was not saved for {destination_key}"
+        )
+
+    if any(
+        saved_record.get(key) != value
+        for key, value in record.items()
+    ):
+        raise RuntimeError(
+            f"Destination metadata verification failed for {destination_key}"
+        )
+
+    return saved_record
 
 
 def complete_metadata_migration(source_key, destination_key):
-    """Remove the source metadata record after the object move is complete."""
+    """Remove source metadata after destination metadata is verified."""
     if not source_key or not destination_key:
         raise ValueError("Source and destination metadata keys are required")
 
-    metadata = load_object_metadata()
+    source_record = get_metadata(source_key)
+    destination_record = get_metadata(destination_key)
 
-    if source_key not in metadata:
+    if source_record is None:
         raise KeyError(f"No metadata exists for {source_key}")
 
-    if destination_key not in metadata:
+    if destination_record is None:
         raise KeyError(f"No metadata exists for {destination_key}")
 
-    if metadata[source_key] != {
+    expected_source_record = {
         key: value
-        for key, value in metadata[destination_key].items()
+        for key, value in destination_record.items()
         if key != "last_moved_at"
-    }:
+    }
+
+    if source_record != expected_source_record:
         raise ValueError("Source and destination metadata do not match")
 
-    del metadata[source_key]
-    save_object_metadata(metadata)
+    if not delete_metadata(source_key):
+        raise RuntimeError(
+            f"Failed to delete source metadata for {source_key}"
+        )
 

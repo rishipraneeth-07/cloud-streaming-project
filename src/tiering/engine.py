@@ -12,6 +12,10 @@ from src.tiering.metadata import (
     load_object_metadata,
     preserve_object_metadata,
 )
+from src.tiering.metadata_repository import (
+    create_migration_record,
+    update_migration_status,
+)
 from src.tiering.policy import load_tiering_rules, get_target_tier
 
 
@@ -24,7 +28,7 @@ def create_minio_client():
             "MINIO_ACCESS_KEY and MINIO_SECRET_KEY must be set"
         )
 
-    endpoint = os.getenv("MINIO_ENDPOINT", "http://localhost:9000")
+    endpoint = os.getenv("MINIO_ENDPOINT", "localhost:9000")
     endpoint = endpoint.replace("http://", "").replace("https://", "")
 
     return Minio(
@@ -96,18 +100,23 @@ def migrate_object(client, source_bucket, object_name, target_bucket):
             f"Destination already exists: {destination_key}"
         )
 
-    client.copy_object(
+    migration_id = create_migration_record(
+        source_bucket,
+        object_name,
         target_bucket,
         object_name,
-        CopySource(source_bucket, object_name),
     )
 
-    # Track which stage has been reached so cleanup never deletes
-    # the destination after source deletion has started.
     metadata_preservation_started = False
     source_removal_started = False
 
     try:
+        client.copy_object(
+            target_bucket,
+            object_name,
+            CopySource(source_bucket, object_name),
+        )
+
         destination_stat = client.stat_object(
             target_bucket,
             object_name,
@@ -123,6 +132,7 @@ def migrate_object(client, source_bucket, object_name, target_bucket):
             source_bucket,
             object_name,
         )
+
         destination_hash = calculate_object_sha256(
             client,
             target_bucket,
@@ -135,25 +145,23 @@ def migrate_object(client, source_bucket, object_name, target_bucket):
                 "do not match"
             )
 
-        # Preserve metadata before attempting source deletion.
-        # If this stage fails, retain both object copies rather than
-        # risk deleting data while metadata state is uncertain.
         metadata_preservation_started = True
 
         preserve_object_metadata(source_key, destination_key)
 
-        # Once source deletion starts, never automatically delete
-        # the destination in an exception handler.
         source_removal_started = True
         client.remove_object(source_bucket, object_name)
 
-        # Remove the old metadata key only after source deletion succeeds.
         complete_metadata_migration(source_key, destination_key)
 
-    except Exception:
-        # Cleanup is permitted only before metadata preservation starts
-        # and before source deletion is attempted.
-        if not metadata_preservation_started and not source_removal_started:
+        update_migration_status(migration_id, "COMPLETED")
+
+    except Exception as error:
+
+        if (
+            not metadata_preservation_started
+            and not source_removal_started
+        ):
             try:
                 client.remove_object(target_bucket, object_name)
             except Exception as cleanup_error:
@@ -162,36 +170,53 @@ def migrate_object(client, source_bucket, object_name, target_bucket):
                     f"Both copies may remain: {cleanup_error}"
                 )
 
+        try:
+            update_migration_status(
+                migration_id,
+                "FAILED",
+                str(error),
+            )
+        except Exception as history_error:
+            print(
+                "WARNING: Could not update migration history: "
+                f"{history_error}"
+            )
+
         raise
 
-    print(
-        f"MIGRATED {source_key} -> {destination_key}"
-    )
+    print(f"MIGRATED {source_key} -> {destination_key}")
 
 
 def preview_tiering():
     client = create_minio_client()
     config = load_tiering_rules()
+
     rules = config["tiers"]
     dry_run = config.get("dry_run", True)
+    metadata = load_object_metadata()
 
     tier_to_bucket = {
         tier: details["bucket"]
         for tier, details in rules.items()
     }
 
-    metadata = load_object_metadata()
-
     for source_tier in ("hot", "warm", "cold"):
+        if source_tier not in tier_to_bucket:
+            continue
+
         source_bucket = tier_to_bucket[source_tier]
 
         if not client.bucket_exists(source_bucket):
             print(f"Skipping missing bucket: {source_bucket}")
             continue
 
-        for obj in client.list_objects(source_bucket, recursive=True):
+        for obj in client.list_objects(
+            source_bucket,
+            recursive=True,
+        ):
             object_name = obj.object_name
             source_key = f"{source_bucket}/{object_name}"
+
             record = metadata.get(source_key)
 
             if record is None:
@@ -200,10 +225,13 @@ def preview_tiering():
                 )
                 continue
 
-            if record.get("timestamp_is_original_creation_time") is not True:
+            if (
+                record.get("timestamp_is_original_creation_time")
+                is not True
+            ):
                 print(
-                    f"SKIP {source_key}: original creation time "
-                    "is not confirmed"
+                    f"SKIP {source_key}: "
+                    "original creation time is not confirmed"
                 )
                 continue
 
@@ -211,15 +239,24 @@ def preview_tiering():
                 age_days = calculate_age_days(
                     record["original_created_at"]
                 )
+
                 target_tier = get_target_tier(age_days, rules)
+
+                if target_tier not in tier_to_bucket:
+                    raise ValueError(
+                        f"Unknown target tier: {target_tier}"
+                    )
+
                 target_bucket = tier_to_bucket[target_tier]
+
             except (KeyError, TypeError, ValueError) as error:
                 print(f"SKIP {source_key}: {error}")
                 continue
 
             if target_bucket == source_bucket:
                 print(
-                    f"KEEP {source_key}: age={age_days:.2f} days, "
+                    f"KEEP {source_key}: "
+                    f"age={age_days:.2f} days, "
                     f"tier={target_tier.upper()}"
                 )
                 continue
@@ -240,9 +277,12 @@ def preview_tiering():
                     target_bucket,
                 )
             except Exception as error:
-                print(f"MIGRATION FAILED for {source_key}: {error}")
+                print(
+                    f"MIGRATION FAILED for {source_key}: {error}"
+                )
 
 
 if __name__ == "__main__":
     preview_tiering()
+
 

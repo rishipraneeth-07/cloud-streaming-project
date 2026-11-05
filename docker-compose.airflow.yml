@@ -7,16 +7,27 @@ services:
     command: standalone
     ports:
       - "8080:8080"
+
+    env_file:
+      - .env
+
     environment:
       AIRFLOW__CORE__EXECUTOR: SequentialExecutor
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW__CORE__DAGS_FOLDER: /opt/project/airflow/dags
       AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "false"
-      MINIO_ENDPOINT: http://host.docker.internal:9000
+
+      POSTGRES_HOST: host.docker.internal
+      POSTGRES_PORT: "5432"
+
+      MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
     volumes:
       - ./:/opt/project
+
     restart: unless-stopped

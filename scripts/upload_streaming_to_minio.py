@@ -73,7 +73,7 @@ def load_committed_files(metadata_dir, source_dir):
 
             if not local_path.is_relative_to(source_dir):
                 raise ValueError(
-                    f"Spark output path is outside the expected directory: "
+                    "Spark output path is outside the expected directory: "
                     f"{local_path}"
                 )
 
@@ -88,12 +88,13 @@ def create_minio_client():
         .replace("http://", "")
         .replace("https://", "")
     )
+
     access_key = os.getenv("MINIO_ACCESS_KEY")
     secret_key = os.getenv("MINIO_SECRET_KEY")
 
     if not access_key or not secret_key:
         raise RuntimeError(
-            "Set MINIO_ACCESS_KEY and MINIO_SECRET_KEY before running this script."
+            "Set MINIO_ACCESS_KEY and MINIO_SECRET_KEY before running."
         )
 
     client = Minio(
@@ -107,6 +108,69 @@ def create_minio_client():
         raise RuntimeError(f"MinIO bucket does not exist: {BUCKET_NAME}")
 
     return client
+
+
+def upload_batch_file(client, file_path, batch_id):
+    file_path = Path(file_path).resolve()
+
+    if not file_path.is_file() or file_path.suffix != ".parquet":
+        raise FileNotFoundError(
+            f"Valid Parquet batch file not found: {file_path}"
+        )
+
+    if isinstance(batch_id, bool) or not isinstance(batch_id, int):
+        raise ValueError("Batch ID must be an integer")
+
+    object_name = (
+        f"{OBJECT_PREFIX}/batches/batch-{batch_id}.parquet"
+    )
+    metadata_key = f"{BUCKET_NAME}/{object_name}"
+    local_size = file_path.stat().st_size
+
+    try:
+        existing_object = client.stat_object(
+            BUCKET_NAME,
+            object_name,
+        )
+
+        if existing_object.size != local_size:
+            raise RuntimeError(
+                f"Existing MinIO object has a different size: "
+                f"{metadata_key}; "
+                f"local={local_size}, remote={existing_object.size}"
+            )
+
+        print(f"Already present; not overwritten: {metadata_key}")
+
+    except S3Error as error:
+        if error.code not in ("NoSuchKey", "NoSuchObject", "NotFound"):
+            raise
+
+        client.fput_object(
+            BUCKET_NAME,
+            object_name,
+            str(file_path),
+            content_type="application/octet-stream",
+        )
+
+        uploaded_object = client.stat_object(
+            BUCKET_NAME,
+            object_name,
+        )
+
+        if uploaded_object.size != local_size:
+            raise RuntimeError(
+                f"Uploaded object size verification failed: {metadata_key}"
+            )
+
+        print(f"Uploaded: {metadata_key}")
+
+    register_object(
+        object_key=metadata_key,
+        timestamp_source="spark_modification_time_unconfirmed",
+    )
+
+    return metadata_key
 
 
 def upload_committed_files(client, committed_files, source_dir):
@@ -156,7 +220,6 @@ def upload_committed_files(client, committed_files, source_dir):
                 content_type="application/octet-stream",
             )
 
-            # Verify that the uploaded object is visible in MinIO.
             client.stat_object(BUCKET_NAME, object_name)
             uploaded += 1
             print(f"Uploaded: {metadata_key}")

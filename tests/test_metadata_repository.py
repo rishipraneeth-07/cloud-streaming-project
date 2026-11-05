@@ -5,6 +5,7 @@ import uuid
 from src.tiering.metadata_repository import (
     delete_metadata,
     get_metadata,
+    list_metadata,
     save_metadata,
 )
 
@@ -37,7 +38,9 @@ class TestMetadataRepository(unittest.TestCase):
         )
 
     def test_missing_metadata_returns_none(self):
-        self.assertIsNone(get_metadata(self.key))
+        result = get_metadata(self.key)
+
+        self.assertIsNone(result)
 
     def test_empty_object_key_is_rejected(self):
         with self.assertRaises(ValueError):
@@ -83,6 +86,27 @@ class TestMetadataRepository(unittest.TestCase):
         )
         self.assertTrue(
             result["timestamp_is_original_creation_time"]
+        )
+
+    def test_list_metadata_returns_saved_records(self):
+        record = {
+            "original_created_at": "2026-10-29T10:00:00+00:00",
+            "timestamp_source": "pipeline_creation",
+            "timestamp_is_original_creation_time": True,
+            "registered_at": "2026-10-29T10:05:00+00:00",
+        }
+
+        save_metadata(self.key, record)
+
+        result = list_metadata()
+
+        self.assertIn(self.key, result)
+        self.assertEqual(
+            result[self.key]["timestamp_source"],
+            "pipeline_creation",
+        )
+        self.assertTrue(
+            result[self.key]["timestamp_is_original_creation_time"]
         )
 
 

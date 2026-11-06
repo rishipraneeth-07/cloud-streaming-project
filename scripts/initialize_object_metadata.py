@@ -1,14 +1,19 @@
 
-import json
+import argparse
 import os
-from datetime import datetime, timezone
+import sys
+from datetime import timezone
 from pathlib import Path
 
 from minio import Minio
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-METADATA_FILE = ROOT_DIR / "config" / "object_metadata.json"
+sys.path.insert(0, str(ROOT_DIR))
+
+from src.tiering.metadata import register_object  # noqa: E402
+from src.tiering.metadata_repository import get_metadata  # noqa: E402
+
 
 BUCKETS = ["hot-data", "warm-data", "cold-data"]
 
@@ -22,8 +27,11 @@ def create_minio_client():
             "Set MINIO_ACCESS_KEY and MINIO_SECRET_KEY environment variables"
         )
 
+    endpoint = os.getenv("MINIO_ENDPOINT", "http://localhost:9000")
+    endpoint = endpoint.replace("http://", "").replace("https://", "")
+
     return Minio(
-        os.getenv("MINIO_ENDPOINT", "http://localhost:9000").replace("http://", "").replace("https://", ""),
+        endpoint,
         access_key=access_key,
         secret_key=secret_key,
         secure=False,
@@ -31,16 +39,22 @@ def create_minio_client():
 
 
 def main():
+    parser = argparse.ArgumentParser(
+        description="Initialize object metadata in PostgreSQL"
+    )
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Write new metadata records to PostgreSQL",
+    )
+    args = parser.parse_args()
+
     client = create_minio_client()
 
-    if METADATA_FILE.exists():
-        with open(METADATA_FILE, "r", encoding="utf-8") as file:
-            metadata = json.load(file)
-    else:
-        metadata = {}
-
-    added = 0
-    skipped = 0
+    discovered = 0
+    new_records = []
+    existing_records = 0
+    skipped_records = 0
 
     for bucket in BUCKETS:
         if not client.bucket_exists(bucket):
@@ -48,45 +62,64 @@ def main():
             continue
 
         for obj in client.list_objects(bucket, recursive=True):
-            key = obj.object_name
+            discovered += 1
+            object_key = f"{bucket}/{obj.object_name}"
 
-            if key in metadata:
-                skipped += 1
+            if obj.last_modified is None:
+                print(f"SKIP {object_key}: modification time unavailable")
+                skipped_records += 1
                 continue
 
-            # Use MinIO's object modification time as the initial
-            # timestamp when no original creation time is available.
             modified_at = obj.last_modified
-
-            if modified_at is None:
-                print(f"SKIP {bucket}/{key}: modification time unavailable")
-                continue
 
             if modified_at.tzinfo is None:
                 modified_at = modified_at.replace(tzinfo=timezone.utc)
 
-            metadata[key] = {
-                "original_created_at": modified_at.astimezone(
-                    timezone.utc
-                ).isoformat(),
-                "timestamp_source": "minio_last_modified",
-                "timestamp_is_original_creation_time": False,
-            }
+            existing = get_metadata(object_key)
 
-            added += 1
-            print(f"ADDED metadata for {bucket}/{key}")
+            if existing is not None:
+                existing_records += 1
+                continue
 
-    METADATA_FILE.parent.mkdir(parents=True, exist_ok=True)
+            timestamp = modified_at.astimezone(timezone.utc).isoformat()
+            new_records.append((object_key, timestamp))
 
-    with open(METADATA_FILE, "w", encoding="utf-8") as file:
-        json.dump(metadata, file, indent=2)
-        file.write("\n")
+    print("\nMetadata initialization preview")
+    print(f"Objects discovered: {discovered}")
+    print(f"New records: {len(new_records)}")
+    print(f"Existing records preserved: {existing_records}")
+    print(f"Skipped records: {skipped_records}")
 
-    print(f"\nMetadata initialization complete.")
-    print(f"New records: {added}")
-    print(f"Existing records preserved: {skipped}")
-    print(f"Metadata file: {METADATA_FILE}")
+    if not args.apply:
+        print("\nDRY RUN: PostgreSQL was not modified.")
+        print("Run with --apply to register the new records.")
+        for object_key, _ in new_records:
+            print(f"WOULD REGISTER: {object_key}")
+        return
+
+    registered = 0
+
+    for object_key, timestamp in new_records:
+        result = register_object(
+            object_key,
+            timestamp,
+            timestamp_source="minio_last_modified",
+        )
+
+        if result is None:
+            raise RuntimeError(
+                f"Metadata registration returned no record: {object_key}"
+            )
+
+        registered += 1
+        print(f"REGISTERED: {object_key}")
+
+    print("\nPostgreSQL metadata initialization complete.")
+    print(f"New unconfirmed records registered: {registered}")
+    print("Existing records were preserved.")
+    print("No MinIO objects were copied, moved, or deleted.")
 
 
 if __name__ == "__main__":
     main()
+

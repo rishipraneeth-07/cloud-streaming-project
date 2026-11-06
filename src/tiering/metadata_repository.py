@@ -1,4 +1,4 @@
-
+\
 import os
 from datetime import datetime
 from pathlib import Path
@@ -93,18 +93,21 @@ def get_metadata(object_key):
     if row is None:
         return None
 
-    return {
+    record = {
         "original_created_at": _to_iso(row[0]),
         "timestamp_source": row[1],
         "timestamp_is_original_creation_time": row[2],
         "registered_at": _to_iso(row[3]),
-        **({"last_moved_at": _to_iso(row[4])} if row[4] is not None else {}),
     }
 
+    if row[4] is not None:
+        record["last_moved_at"] = _to_iso(row[4])
+
+    return record
 
 
 def list_metadata():
-    """Retrieve all object metadata as a dictionary keyed by object key."""
+    """Retrieve all object metadata keyed by object key."""
     with get_connection() as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -140,9 +143,13 @@ def list_metadata():
     return metadata
 
 
-
 def save_metadata(object_key, record):
-    """Insert or update an object's metadata in PostgreSQL."""
+    """
+    Insert or update metadata without replacing trusted timestamps.
+
+    An unconfirmed timestamp can only be upgraded using a
+    confirmed pipeline_creation timestamp.
+    """
     if not isinstance(object_key, str) or not object_key.strip():
         raise ValueError("Object key must be a non-empty string")
 
@@ -152,13 +159,22 @@ def save_metadata(object_key, record):
     timestamp_source = record.get("timestamp_source", "unknown")
     confirmed = record.get("timestamp_is_original_creation_time", False)
 
-    if not isinstance(timestamp_source, str) or not timestamp_source:
+    if not isinstance(timestamp_source, str) or not timestamp_source.strip():
         raise ValueError("Timestamp source must be a non-empty string")
 
     if not isinstance(confirmed, bool):
         raise TypeError("Timestamp confirmation must be a boolean")
 
+    if confirmed and timestamp_source != "pipeline_creation":
+        raise ValueError(
+            "Only pipeline_creation timestamps can be confirmed"
+        )
+
     created_at = record.get("original_created_at")
+
+    if not created_at:
+        raise ValueError("Original creation timestamp is required")
+
     registered_at = record.get("registered_at")
     last_moved_at = record.get("last_moved_at")
 
@@ -183,28 +199,45 @@ def save_metadata(object_key, record):
                     %s
                 )
                 ON CONFLICT (object_key) DO UPDATE SET
-    original_created_at = CASE
-        WHEN object_metadata.timestamp_is_original_creation_time
-        THEN object_metadata.original_created_at
-        ELSE EXCLUDED.original_created_at
-    END,
-    timestamp_source = CASE
-        WHEN object_metadata.timestamp_is_original_creation_time
-        THEN object_metadata.timestamp_source
-        ELSE EXCLUDED.timestamp_source
-    END,
-    timestamp_is_original_creation_time =
-        object_metadata.timestamp_is_original_creation_time
-        OR EXCLUDED.timestamp_is_original_creation_time,
-    registered_at = CASE
-        WHEN object_metadata.timestamp_is_original_creation_time
-        THEN object_metadata.registered_at
-        ELSE EXCLUDED.registered_at
-    END,
-    last_moved_at = COALESCE(
-        EXCLUDED.last_moved_at,
-        object_metadata.last_moved_at
-    )
+
+                    original_created_at = CASE
+                        WHEN object_metadata.timestamp_is_original_creation_time
+                            THEN object_metadata.original_created_at
+                        WHEN EXCLUDED.timestamp_is_original_creation_time
+                            AND EXCLUDED.timestamp_source = 'pipeline_creation'
+                            THEN EXCLUDED.original_created_at
+                        ELSE object_metadata.original_created_at
+                    END,
+
+                    timestamp_source = CASE
+                        WHEN object_metadata.timestamp_is_original_creation_time
+                            THEN object_metadata.timestamp_source
+                        WHEN EXCLUDED.timestamp_is_original_creation_time
+                            AND EXCLUDED.timestamp_source = 'pipeline_creation'
+                            THEN EXCLUDED.timestamp_source
+                        ELSE object_metadata.timestamp_source
+                    END,
+
+                    timestamp_is_original_creation_time =
+                        object_metadata.timestamp_is_original_creation_time
+                        OR (
+                            EXCLUDED.timestamp_is_original_creation_time
+                            AND EXCLUDED.timestamp_source = 'pipeline_creation'
+                        ),
+
+                    registered_at = CASE
+                        WHEN object_metadata.timestamp_is_original_creation_time
+                            THEN object_metadata.registered_at
+                        WHEN EXCLUDED.timestamp_is_original_creation_time
+                            AND EXCLUDED.timestamp_source = 'pipeline_creation'
+                            THEN EXCLUDED.registered_at
+                        ELSE object_metadata.registered_at
+                    END,
+
+                    last_moved_at = COALESCE(
+                        EXCLUDED.last_moved_at,
+                        object_metadata.last_moved_at
+                    )
                 """,
                 (
                     object_key,
@@ -229,7 +262,6 @@ def delete_metadata(object_key):
                 (object_key,),
             )
             return cursor.rowcount == 1
-
 
 
 def create_migration_record(
@@ -272,6 +304,9 @@ def update_migration_status(
     if status not in ("COMPLETED", "FAILED"):
         raise ValueError("Invalid migration status")
 
+    if not isinstance(migration_id, int) or migration_id <= 0:
+        raise ValueError("Migration ID must be a positive integer")
+
     with get_connection() as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -293,7 +328,7 @@ def update_migration_status(
 
 
 def list_migration_history():
-    """Retrieve migration history ordered by creation time."""
+    """Retrieve migration history ordered by ID."""
     with get_connection() as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -314,3 +349,4 @@ def list_migration_history():
             )
 
             return cursor.fetchall()
+

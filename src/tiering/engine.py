@@ -40,10 +40,11 @@ def create_minio_client():
 
 
 def calculate_age_days(original_created_at):
+    """Calculate object age using its trusted original creation timestamp."""
     created_at = datetime.fromisoformat(original_created_at)
 
     if created_at.tzinfo is None:
-        created_at = created_at.replace(tzinfo=timezone.utc)
+        raise ValueError("Creation timestamp must include a timezone")
 
     age_days = (
         datetime.now(timezone.utc)
@@ -57,6 +58,7 @@ def calculate_age_days(original_created_at):
 
 
 def calculate_object_sha256(client, bucket_name, object_name):
+    """Calculate SHA-256 by streaming an object from MinIO."""
     response = client.get_object(bucket_name, object_name)
 
     try:
@@ -72,6 +74,7 @@ def calculate_object_sha256(client, bucket_name, object_name):
 
 
 def destination_exists(client, bucket_name, object_name):
+    """Check whether a destination object exists."""
     try:
         client.stat_object(bucket_name, object_name)
         return True
@@ -87,8 +90,12 @@ def destination_exists(client, bucket_name, object_name):
 
 
 def migrate_object(client, source_bucket, object_name, target_bucket):
+    """Migrate one object with integrity and metadata verification."""
     if source_bucket == target_bucket:
         raise ValueError("Source and destination buckets must differ")
+
+    if not object_name:
+        raise ValueError("Object name cannot be empty")
 
     source_key = f"{source_bucket}/{object_name}"
     destination_key = f"{target_bucket}/{object_name}"
@@ -97,7 +104,7 @@ def migrate_object(client, source_bucket, object_name, target_bucket):
 
     if destination_exists(client, target_bucket, object_name):
         raise FileExistsError(
-            f"Destination already exists: {destination_key}"
+            f"Destination object already exists: {destination_key}"
         )
 
     migration_id = create_migration_record(
@@ -107,8 +114,8 @@ def migrate_object(client, source_bucket, object_name, target_bucket):
         object_name,
     )
 
-    metadata_preservation_started = False
-    source_removal_started = False
+    destination_created = False
+    source_deleted = False
 
     try:
         client.copy_object(
@@ -116,16 +123,15 @@ def migrate_object(client, source_bucket, object_name, target_bucket):
             object_name,
             CopySource(source_bucket, object_name),
         )
+        destination_created = True
 
         destination_stat = client.stat_object(
             target_bucket,
             object_name,
         )
 
-        if source_stat.size != destination_stat.size:
-            raise RuntimeError(
-                "Migration verification failed: object sizes do not match"
-            )
+        if destination_stat.size != source_stat.size:
+            raise RuntimeError("Object size verification failed")
 
         source_hash = calculate_object_sha256(
             client,
@@ -140,149 +146,146 @@ def migrate_object(client, source_bucket, object_name, target_bucket):
         )
 
         if source_hash != destination_hash:
-            raise RuntimeError(
-                "Migration verification failed: SHA-256 checksums "
-                "do not match"
-            )
-
-        metadata_preservation_started = True
+            raise RuntimeError("SHA-256 verification failed")
 
         preserve_object_metadata(source_key, destination_key)
 
-        source_removal_started = True
+        # Remove the source only after object and metadata verification.
         client.remove_object(source_bucket, object_name)
+        source_deleted = True
 
         complete_metadata_migration(source_key, destination_key)
 
         update_migration_status(migration_id, "COMPLETED")
 
-    except Exception as error:
+        print(
+            f"MIGRATED: {source_key} -> {destination_key} "
+            f"(SHA-256 verified)"
+        )
 
-        if (
-            not metadata_preservation_started
-            and not source_removal_started
-        ):
+        return True
+
+    except Exception as error:
+        # Keep the destination if the source has already been deleted.
+        # It may be needed to recover a metadata/database failure.
+        if destination_created and not source_deleted:
             try:
                 client.remove_object(target_bucket, object_name)
+                print(f"Removed incomplete destination: {destination_key}")
             except Exception as cleanup_error:
                 print(
-                    "WARNING: Destination cleanup failed. "
-                    f"Both copies may remain: {cleanup_error}"
+                    f"WARNING: Could not remove incomplete destination "
+                    f"{destination_key}: {cleanup_error}"
                 )
 
         try:
             update_migration_status(
                 migration_id,
                 "FAILED",
-                str(error),
+                str(error)[:2000],
             )
-        except Exception as history_error:
+        except Exception as status_error:
             print(
-                "WARNING: Could not update migration history: "
-                f"{history_error}"
+                f"WARNING: Could not update migration history: {status_error}"
             )
 
         raise
 
-    print(f"MIGRATED {source_key} -> {destination_key}")
-
 
 def preview_tiering():
+    """Preview or execute migrations according to the configured dry-run flag."""
+    rules = load_tiering_rules()
     client = create_minio_client()
-    config = load_tiering_rules()
-
-    rules = config["tiers"]
-    dry_run = config.get("dry_run", True)
     metadata = load_object_metadata()
 
-    tier_to_bucket = {
-        tier: details["bucket"]
-        for tier, details in rules.items()
-    }
+    dry_run = rules.get("dry_run", True)
 
-    for source_tier in ("hot", "warm", "cold"):
-        if source_tier not in tier_to_bucket:
+    if not isinstance(dry_run, bool):
+        raise ValueError("dry_run must be a boolean in tiering rules")
+
+    print("\nStorage tiering execution")
+    print(f"Dry run: {dry_run}")
+    print(f"Metadata records loaded: {len(metadata)}")
+
+    eligible = 0
+    skipped = 0
+    migrated = 0
+
+    for object_key, record in metadata.items():
+        if not isinstance(record, dict):
+            print(f"SKIP {object_key}: invalid metadata")
+            skipped += 1
             continue
 
-        source_bucket = tier_to_bucket[source_tier]
-
-        if not client.bucket_exists(source_bucket):
-            print(f"Skipping missing bucket: {source_bucket}")
+        if record.get("timestamp_is_original_creation_time") is not True:
+            print(f"SKIP {object_key}: creation timestamp is unconfirmed")
+            skipped += 1
             continue
 
-        for obj in client.list_objects(
-            source_bucket,
-            recursive=True,
-        ):
-            object_name = obj.object_name
-            source_key = f"{source_bucket}/{object_name}"
+        original_created_at = record.get("original_created_at")
 
-            record = metadata.get(source_key)
+        if not original_created_at:
+            print(f"SKIP {object_key}: creation timestamp is missing")
+            skipped += 1
+            continue
 
-            if record is None:
-                print(
-                    f"SKIP {source_key}: metadata record is missing"
-                )
-                continue
+        try:
+            age_days = calculate_age_days(original_created_at)
+        except (TypeError, ValueError) as error:
+            print(f"SKIP {object_key}: invalid creation timestamp: {error}")
+            skipped += 1
+            continue
 
-            if (
-                record.get("timestamp_is_original_creation_time")
-                is not True
+        parts = object_key.split("/", 1)
+
+        if len(parts) != 2:
+            print(f"SKIP {object_key}: invalid bucket-prefixed object key")
+            skipped += 1
+            continue
+
+        source_bucket, object_name = parts
+
+        try:
+            target_bucket = get_target_tier(
+                source_bucket,
+                age_days,
+                rules,
+            )
+        except Exception as error:
+            print(f"SKIP {object_key}: tier policy error: {error}")
+            skipped += 1
+            continue
+
+        if not target_bucket or target_bucket == source_bucket:
+            skipped += 1
+            continue
+
+        eligible += 1
+
+        if dry_run:
+            print(
+                f"WOULD MIGRATE: {object_key} -> "
+                f"{target_bucket}/{object_name} "
+                f"(age: {age_days:.1f} days)"
+            )
+            continue
+
+        try:
+            if migrate_object(
+                client,
+                source_bucket,
+                object_name,
+                target_bucket,
             ):
-                print(
-                    f"SKIP {source_key}: "
-                    "original creation time is not confirmed"
-                )
-                continue
+                migrated += 1
+        except Exception as error:
+            print(f"FAILED: {object_key}: {error}")
 
-            try:
-                age_days = calculate_age_days(
-                    record["original_created_at"]
-                )
+    print("\nTiering summary")
+    print(f"Eligible objects: {eligible}")
+    print(f"Skipped objects: {skipped}")
+    print(f"Successfully migrated: {migrated}")
 
-                target_tier = get_target_tier(age_days, rules)
-
-                if target_tier not in tier_to_bucket:
-                    raise ValueError(
-                        f"Unknown target tier: {target_tier}"
-                    )
-
-                target_bucket = tier_to_bucket[target_tier]
-
-            except (KeyError, TypeError, ValueError) as error:
-                print(f"SKIP {source_key}: {error}")
-                continue
-
-            if target_bucket == source_bucket:
-                print(
-                    f"KEEP {source_key}: "
-                    f"age={age_days:.2f} days, "
-                    f"tier={target_tier.upper()}"
-                )
-                continue
-
-            if dry_run:
-                print(
-                    f"DRY RUN: WOULD MOVE {source_key} "
-                    f"-> {target_bucket}/{object_name}: "
-                    f"age={age_days:.2f} days"
-                )
-                continue
-
-            try:
-                migrate_object(
-                    client,
-                    source_bucket,
-                    object_name,
-                    target_bucket,
-                )
-            except Exception as error:
-                print(
-                    f"MIGRATION FAILED for {source_key}: {error}"
-                )
-
-
-if __name__ == "__main__":
-    preview_tiering()
-
+    if dry_run:
+        print("DRY RUN: No MinIO objects were modified.")
 

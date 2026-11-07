@@ -1,0 +1,10 @@
+{
+  "currency": "USD",
+  "basis": "GB-month",
+  "rates": {
+    "hot-data": 0.023,
+    "warm-data": 0.0125,
+    "cold-data": 0.004
+  },
+  "note": "Illustrative placeholder rates only. Replace with actual provider/region rates. Local MinIO has no provider invoice."
+}

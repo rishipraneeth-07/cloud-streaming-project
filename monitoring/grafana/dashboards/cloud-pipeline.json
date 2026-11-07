@@ -1,0 +1,100 @@
+{
+  "uid": "cloud-pipeline",
+  "title": "Cloud-Native Batch & Streaming Pipeline",
+  "tags": ["spark", "kafka", "minio", "airflow"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Registered Objects",
+      "type": "stat",
+      "datasource": {"type": "postgres", "uid": "project-postgres"},
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 0},
+      "targets": [{
+        "rawSql": "SELECT COUNT(*) AS value FROM object_metadata",
+        "format": "table",
+        "refId": "A"
+      }]
+    },
+    {
+      "id": 2,
+      "title": "Confirmed Creation Timestamps",
+      "type": "stat",
+      "datasource": {"type": "postgres", "uid": "project-postgres"},
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 0},
+      "targets": [{
+        "rawSql": "SELECT COUNT(*) AS value FROM object_metadata WHERE timestamp_is_original_creation_time = TRUE",
+        "format": "table",
+        "refId": "A"
+      }]
+    },
+    {
+      "id": 3,
+      "title": "Successful Migrations",
+      "type": "stat",
+      "datasource": {"type": "postgres", "uid": "project-postgres"},
+      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 0},
+      "targets": [{
+        "rawSql": "SELECT COUNT(*) AS value FROM migration_history WHERE status = 'COMPLETED'",
+        "format": "table",
+        "refId": "A"
+      }]
+    },
+    {
+      "id": 4,
+      "title": "Failed Migrations",
+      "type": "stat",
+      "datasource": {"type": "postgres", "uid": "project-postgres"},
+      "gridPos": {"h": 5, "w": 6, "x": 18, "y": 0},
+      "targets": [{
+        "rawSql": "SELECT COUNT(*) AS value FROM migration_history WHERE status = 'FAILED'",
+        "format": "table",
+        "refId": "A"
+      }]
+    },
+    {
+      "id": 5,
+      "title": "Migration History",
+      "type": "table",
+      "datasource": {"type": "postgres", "uid": "project-postgres"},
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 5},
+      "targets": [{
+        "rawSql": "SELECT id, source_bucket, target_bucket, status, started_at, completed_at FROM migration_history ORDER BY started_at DESC LIMIT 50",
+        "format": "table",
+        "refId": "A"
+      }]
+    },
+    {
+      "id": 6,
+      "title": "Database Table Activity",
+      "type": "table",
+      "datasource": {"type": "postgres", "uid": "project-postgres"},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 15},
+      "targets": [{
+        "rawSql": "SELECT schemaname, relname AS table_name, n_live_tup AS estimated_rows, n_tup_ins AS inserts, n_tup_upd AS updates, n_tup_del AS deletes FROM pg_stat_user_tables ORDER BY n_live_tup DESC",
+        "format": "table",
+        "refId": "A"
+      }]
+    },
+    {
+      "id": 7,
+      "title": "Migration Status Distribution",
+      "type": "piechart",
+      "datasource": {"type": "postgres", "uid": "project-postgres"},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 15},
+      "targets": [{
+        "rawSql": "SELECT status, COUNT(*) AS total FROM migration_history GROUP BY status",
+        "format": "table",
+        "refId": "A"
+      }],
+      "options": {
+        "legend": {"displayMode": "list", "placement": "right"},
+        "pieType": "donut",
+        "displayLabels": ["name", "value"]
+      }
+    }
+  ]
+}

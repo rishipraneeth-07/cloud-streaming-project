@@ -1,0 +1,45 @@
+services:
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    container_name: project-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    networks:
+      - project-network
+
+  project-exporter:
+    build:
+      context: ./monitoring/exporter
+    container_name: project-exporter
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: project-postgres
+      POSTGRES_PORT: "5432"
+      MINIO_ENDPOINT: minio:9000
+      KAFKA_BOOTSTRAP_SERVERS: project-kafka:29092
+      AIRFLOW_HEALTH_URL: http://project-airflow:8080/health
+      STORAGE_COSTS_FILE: /app/storage_costs.json
+      METRICS_INTERVAL_SECONDS: "30"
+    volumes:
+      - ./config/storage_costs.json:/app/storage_costs.json:ro
+    ports:
+      - "9105:9105"
+    networks:
+      - project-network
+
+volumes:
+  prometheus-data:
+
+networks:
+  project-network:
+    external: true
+    name: cloud-streaming-project_default

@@ -1,0 +1,348 @@
+{
+  "uid": "cloud-pipeline-final",
+  "title": "Cloud-Native Data Pipeline \u2014 Operations & Cost Optimization",
+  "tags": [
+    "spark",
+    "kafka",
+    "minio",
+    "airflow",
+    "postgres",
+    "cost-optimization"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Objects in MinIO",
+      "type": "stat",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(project_minio_bucket_objects)",
+          "legendFormat": "{{bucket}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Total stored bytes",
+      "type": "stat",
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 6,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(project_minio_bucket_bytes)",
+          "legendFormat": "{{bucket}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Estimated monthly storage cost (USD)",
+      "type": "stat",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(project_minio_estimated_monthly_cost_usd)",
+          "legendFormat": "{{bucket}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "PostgreSQL health",
+      "type": "stat",
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 3,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "project_postgres_up",
+          "legendFormat": "{{bucket}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "MinIO health",
+      "type": "stat",
+      "gridPos": {
+        "x": 21,
+        "y": 0,
+        "w": 3,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "project_minio_up",
+          "legendFormat": "{{bucket}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Objects by tier",
+      "type": "barchart",
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "project_minio_bucket_objects",
+          "legendFormat": "{{bucket}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Storage bytes by tier",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 5,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "project_minio_bucket_bytes",
+          "legendFormat": "{{bucket}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Estimated monthly cost by tier (USD)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 13,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "project_minio_estimated_monthly_cost_usd",
+          "legendFormat": "{{bucket}}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Kafka topic count",
+      "type": "stat",
+      "gridPos": {
+        "x": 12,
+        "y": 13,
+        "w": 4,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "project_kafka_topics",
+          "legendFormat": "{{bucket}}"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Kafka health",
+      "type": "stat",
+      "gridPos": {
+        "x": 16,
+        "y": 13,
+        "w": 4,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "project_kafka_up",
+          "legendFormat": "{{bucket}}"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Airflow component health",
+      "type": "table",
+      "gridPos": {
+        "x": 20,
+        "y": 13,
+        "w": 4,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "project_airflow_component_up",
+          "legendFormat": "{{bucket}}"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "Migration history",
+      "type": "table",
+      "gridPos": {
+        "x": 0,
+        "y": 21,
+        "w": 12,
+        "h": 9
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "project-postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT id, source_bucket, source_key, destination_bucket, destination_key, status, started_at, completed_at, error_message FROM migration_history ORDER BY started_at DESC LIMIT 50"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "title": "File inventory \u2014 latest seen",
+      "type": "table",
+      "gridPos": {
+        "x": 12,
+        "y": 21,
+        "w": 12,
+        "h": 9
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "project-postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT bucket, object_name, inferred_source, size_bytes, etag, last_modified, current_tier, compression_codec, estimated_monthly_cost_usd, last_seen_at FROM object_inventory ORDER BY last_seen_at DESC LIMIT 100"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "title": "Pipeline run totals",
+      "type": "table",
+      "gridPos": {
+        "x": 0,
+        "y": 30,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "project-postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT pipeline_name, run_type, status, COUNT(*) AS runs, SUM(records_processed) AS records_processed, SUM(records_failed) AS records_failed, MAX(started_at) AS last_started FROM pipeline_runs GROUP BY pipeline_name, run_type, status ORDER BY last_started DESC"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "title": "Optimization history",
+      "type": "table",
+      "gridPos": {
+        "x": 12,
+        "y": 30,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "project-postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT id, bucket, object_name, operation, source_codec, target_codec, before_bytes, after_bytes, bytes_saved, status, created_at FROM object_optimization_history ORDER BY created_at DESC LIMIT 100"
+        }
+      ]
+    }
+  ]
+}

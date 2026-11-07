@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: Cloud Pipeline
+    orgId: 1
+    folder: Cloud Streaming Project
+    type: file
+    disableDeletion: true
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards

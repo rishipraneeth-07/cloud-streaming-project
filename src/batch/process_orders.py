@@ -10,7 +10,7 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT_DIR))
 
 from src.tiering.metadata import register_object
-from src.common.pipeline_tracker import track_pipeline_run
+from src.common.pipeline_tracker import track_pipeline_run, update_pipeline_progress
 
 
 def main():
@@ -71,6 +71,12 @@ def main():
 
             run["records_processed"] = valid_count
             run["records_failed"] = original_count - valid_count
+
+            update_pipeline_progress(
+                run["id"],
+                run["records_processed"],
+                run["records_failed"],
+            )
 
             print("Original records:", original_count)
             print("Valid records:", valid_count)

@@ -16,7 +16,7 @@ from scripts.upload_streaming_to_minio import (
     upload_batch_file,
 )
 
-from src.common.pipeline_tracker import track_pipeline_run
+from src.common.pipeline_tracker import track_pipeline_run, update_pipeline_progress
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -99,6 +99,12 @@ def main():
 
                 run["records_processed"] += valid_count
                 run["records_failed"] += total_count - valid_count
+
+                update_pipeline_progress(
+                    run["id"],
+                    run["records_processed"],
+                    run["records_failed"],
+                )
 
                 if valid_count == 0:
                     print(

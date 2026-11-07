@@ -31,6 +31,27 @@ def start_pipeline_run(pipeline_name, run_type):
             return cursor.fetchone()[0]
 
 
+
+def update_pipeline_progress(run_id, records_processed, records_failed):
+    if records_processed < 0 or records_failed < 0:
+        raise ValueError("Record counts cannot be negative")
+
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE pipeline_runs
+                SET records_processed = %s,
+                    records_failed = %s
+                WHERE id = %s AND status = 'RUNNING'
+                """,
+                (records_processed, records_failed, run_id),
+            )
+
+            if cursor.rowcount != 1:
+                raise KeyError(f"Active pipeline run not found: {run_id}")
+
+
 def finish_pipeline_run(
     run_id,
     status,

@@ -142,14 +142,16 @@
         {
           "refId": "A",
           "expr": "project_minio_bucket_objects",
-          "legendFormat": "{{bucket}}"
+          "legendFormat": "{{bucket}}",
+          "instant": true,
+          "format": "time_series"
         }
       ]
     },
     {
       "id": 7,
       "title": "Storage bytes by tier",
-      "type": "timeseries",
+      "type": "barchart",
       "gridPos": {
         "x": 12,
         "y": 5,
@@ -164,14 +166,16 @@
         {
           "refId": "A",
           "expr": "project_minio_bucket_bytes",
-          "legendFormat": "{{bucket}}"
+          "legendFormat": "{{bucket}}",
+          "instant": true,
+          "format": "time_series"
         }
       ]
     },
     {
       "id": 8,
       "title": "Estimated monthly cost by tier (USD)",
-      "type": "timeseries",
+      "type": "barchart",
       "gridPos": {
         "x": 0,
         "y": 13,
@@ -186,7 +190,9 @@
         {
           "refId": "A",
           "expr": "project_minio_estimated_monthly_cost_usd",
-          "legendFormat": "{{bucket}}"
+          "legendFormat": "{{bucket}}",
+          "instant": true,
+          "format": "time_series"
         }
       ]
     },
@@ -237,7 +243,7 @@
     {
       "id": 11,
       "title": "Airflow component health",
-      "type": "table",
+      "type": "stat",
       "gridPos": {
         "x": 20,
         "y": 13,
@@ -252,9 +258,55 @@
         {
           "refId": "A",
           "expr": "project_airflow_component_up",
-          "legendFormat": "{{bucket}}"
+          "legendFormat": "{{component}}",
+          "instant": true
         }
-      ]
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "text": "DOWN"
+                },
+                "1": {
+                  "text": "HEALTHY"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
     },
     {
       "id": 12,
@@ -307,8 +359,8 @@
       "gridPos": {
         "x": 0,
         "y": 30,
-        "w": 12,
-        "h": 8
+        "w": 24,
+        "h": 9
       },
       "datasource": {
         "type": "postgres",
@@ -327,10 +379,10 @@
       "title": "Optimization history",
       "type": "table",
       "gridPos": {
-        "x": 12,
-        "y": 30,
-        "w": 12,
-        "h": 8
+        "x": 0,
+        "y": 39,
+        "w": 24,
+        "h": 9
       },
       "datasource": {
         "type": "postgres",

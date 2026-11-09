@@ -4,13 +4,74 @@ from pathlib import Path
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, sum, count
+from minio import Minio
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT_DIR))
 
-from src.tiering.metadata import register_object
 from src.common.pipeline_tracker import track_pipeline_run, update_pipeline_progress
+from src.tiering.metadata import register_object
+
+
+def create_minio_client():
+    import os
+
+    access_key = os.getenv("MINIO_ACCESS_KEY")
+    secret_key = os.getenv("MINIO_SECRET_KEY")
+    if not access_key or not secret_key:
+        raise RuntimeError("Set MINIO_ACCESS_KEY and MINIO_SECRET_KEY.")
+
+    endpoint = os.getenv("MINIO_ENDPOINT", "localhost:9000")
+    endpoint = endpoint.replace("http://", "").replace("https://", "")
+    return Minio(
+        endpoint,
+        access_key=access_key,
+        secret_key=secret_key,
+        secure=os.getenv("MINIO_SECURE", "false").lower() == "true",
+    )
+
+
+def upload_parquet_outputs(client, run_id, dataset_name, output_path):
+    bucket = "hot-data"
+    if not client.bucket_exists(bucket):
+        raise RuntimeError(
+            f"MinIO bucket does not exist: {bucket}. "
+            "Run scripts/setup_tier_buckets.py first."
+        )
+
+    parquet_files = sorted(Path(output_path).glob("*.parquet"))
+    if not parquet_files:
+        raise RuntimeError(f"No Parquet files found in {output_path}")
+
+    uploaded = []
+    for parquet_file in parquet_files:
+        object_name = (
+            f"batch/{dataset_name}/run-{run_id}/{parquet_file.name}"
+        )
+        client.fput_object(
+            bucket,
+            object_name,
+            str(parquet_file),
+            content_type="application/octet-stream",
+        )
+        remote = client.stat_object(bucket, object_name)
+        local_size = parquet_file.stat().st_size
+        if remote.size != local_size:
+            raise RuntimeError(
+                f"MinIO size verification failed for {bucket}/{object_name}"
+            )
+
+        metadata_key = f"{bucket}/{object_name}"
+        register_object(
+            object_key=metadata_key,
+            original_created_at=datetime.now(timezone.utc).isoformat(),
+            timestamp_source="pipeline_creation",
+        )
+        uploaded.append(metadata_key)
+
+    return uploaded
+
 
 
 def main():
@@ -128,32 +189,19 @@ def main():
 
             print("Product summary saved to:", summary_output_path)
 
-            bucket_name = "hot-data"
-
-            for dataset_name, output_path, created_at in [
-                ("orders", orders_output_path, orders_created_at),
-                ("product_summary", summary_output_path, summary_created_at),
+            minio_client = create_minio_client()
+            for dataset_name, output_path in [
+                ("orders", orders_output_path),
+                ("product_summary", summary_output_path),
             ]:
-                parquet_files = list(output_path.glob("*.parquet"))
-
-                if not parquet_files:
-                    raise RuntimeError(
-                        f"No Parquet files found in {output_path}"
-                    )
-
-                for parquet_file in parquet_files:
-                    object_key = (
-                        f"{bucket_name}/batch/{dataset_name}/"
-                        f"{parquet_file.name}"
-                    )
-
-                    register_object(
-                        object_key=object_key,
-                        original_created_at=created_at,
-                        timestamp_source="pipeline_creation",
-                    )
-
-                    print("Registered metadata:", object_key)
+                uploaded_objects = upload_parquet_outputs(
+                    minio_client,
+                    run["id"],
+                    dataset_name,
+                    output_path,
+                )
+                for object_key in uploaded_objects:
+                    print("Uploaded and verified:", object_key)
 
             saved_orders_df = spark.read.parquet(
                 str(orders_output_path)

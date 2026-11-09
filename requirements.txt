@@ -1,1 +1,8 @@
+# Core pipeline runtime
+pyspark==4.2.0
+minio==7.2.20
+kafka-python-ng==2.2.3
 psycopg[binary]>=3.2,<4
+
+# Tests and local validation
+pytest>=8.0,<10

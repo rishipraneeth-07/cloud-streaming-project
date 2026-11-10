@@ -4,7 +4,20 @@ services:
       context: .
       dockerfile: airflow/Dockerfile
     container_name: project-airflow
-    command: standalone
+    user: "${AIRFLOW_UID:-1000}:0"
+    shm_size: 2gb
+    command:
+      - bash
+      - -c
+      - >-
+        pidfile="$$AIRFLOW_HOME/airflow-webserver.pid";
+        if [ -f "$$pidfile" ]; then
+          old_pid=$$(cat "$$pidfile");
+          if ! kill -0 "$$old_pid" 2>/dev/null || ! tr '\\0' ' ' <"/proc/$$old_pid/cmdline" 2>/dev/null | grep -q 'airflow webserver'; then
+            rm -f "$$pidfile";
+          fi;
+        fi;
+        exec /home/airflow/.local/bin/airflow standalone
     ports:
       - "8080:8080"
 
@@ -15,19 +28,32 @@ services:
       AIRFLOW__CORE__EXECUTOR: SequentialExecutor
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW__CORE__DAGS_FOLDER: /opt/project/airflow/dags
+      AIRFLOW_HOME: /opt/airflow
+      HOME: /opt/airflow
       AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "false"
 
-      POSTGRES_HOST: host.docker.internal
+      POSTGRES_HOST: project-postgres
       POSTGRES_PORT: "5432"
 
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
-
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+      PATH: /home/airflow/.local/bin:/usr/lib/jvm/java-17-openjdk-amd64/bin:/usr/local/bin:/usr/bin:/bin
+      KAFKA_BOOTSTRAP_SERVERS: project-kafka:29092
+      PYSPARK_PYTHON: /usr/local/bin/python
+      PYSPARK_DRIVER_PYTHON: /usr/local/bin/python
 
     volumes:
       - ./:/opt/project
+      - ./.venv:/opt/project/.venv:ro
+      - ./data/airflow-home:/opt/airflow
 
     restart: unless-stopped
+    networks:
+      - project-network
+
+networks:
+  project-network:
+    external: true
+    name: cloud-streaming-project_default

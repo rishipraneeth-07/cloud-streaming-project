@@ -7,7 +7,10 @@ services:
       - "9090:9090"
     volumes:
       - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus-data:/prometheus
+      - ./monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      # Keep the pre-existing Prometheus TSDB volume intact. It contains samples
+      # outside the current time window, so start fresh without deleting history.
+      - prometheus-data-recovered:/prometheus
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
@@ -26,6 +29,7 @@ services:
       POSTGRES_PORT: "5432"
       MINIO_ENDPOINT: minio:9000
       KAFKA_BOOTSTRAP_SERVERS: project-kafka:29092
+      KAFKA_CONSUMER_GROUP: orders-structured-streaming
       AIRFLOW_HEALTH_URL: http://project-airflow:8080/health
       STORAGE_COSTS_FILE: /app/storage_costs.json
       METRICS_INTERVAL_SECONDS: "30"
@@ -37,7 +41,7 @@ services:
       - project-network
 
 volumes:
-  prometheus-data:
+  prometheus-data-recovered:
 
 networks:
   project-network:

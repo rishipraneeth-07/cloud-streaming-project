@@ -7,7 +7,7 @@ from pathlib import Path
 import psycopg2
 import requests
 from minio import Minio
-from kafka import KafkaAdminClient
+from kafka import KafkaAdminClient, KafkaConsumer
 from prometheus_client import start_http_server, Gauge
 
 logging.basicConfig(level=logging.INFO)
@@ -42,6 +42,16 @@ pipeline_throughput = Gauge(
 
 kafka_up = Gauge("project_kafka_up", "Kafka admin API reachable")
 kafka_topic_count = Gauge("project_kafka_topics", "Kafka topic count")
+kafka_consumer_lag = Gauge(
+    "project_kafka_consumer_lag_records",
+    "Kafka records behind the broker end offset for the committed consumer group",
+    ["group", "topic", "partition"],
+)
+kafka_consumer_lag_available = Gauge(
+    "project_kafka_consumer_lag_available",
+    "Whether committed Kafka consumer lag is currently available for the configured group",
+    ["group"],
+)
 airflow_component_up = Gauge("project_airflow_component_up", "Airflow health component", ["component"])
 inventory_last_sync = Gauge("project_inventory_last_sync_unixtime", "Unix time of last successful inventory sync")
 
@@ -177,13 +187,36 @@ def collect_postgres():
 def collect_kafka():
     admin = None
     try:
+        bootstrap = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "project-kafka:29092")
         admin = KafkaAdminClient(
-            bootstrap_servers=os.getenv("KAFKA_BOOTSTRAP_SERVERS", "project-kafka:29092"),
+            bootstrap_servers=bootstrap,
             request_timeout_ms=5000,
             api_version_auto_timeout_ms=5000,
         )
-        kafka_topic_count.set(len(admin.list_topics()))
+        topics = admin.list_topics()
+        kafka_topic_count.set(len(topics))
         kafka_up.set(1)
+        group = os.getenv("KAFKA_CONSUMER_GROUP", "orders-structured-streaming")
+        try:
+            committed = admin.list_consumer_group_offsets(group)
+            topic_partitions = list(committed)
+            if not topic_partitions:
+                kafka_consumer_lag_available.labels(group).set(0)
+                return
+            consumer = KafkaConsumer(bootstrap_servers=bootstrap, enable_auto_commit=False)
+            try:
+                consumer.assign(topic_partitions)
+                latest = consumer.end_offsets(topic_partitions)
+            finally:
+                consumer.close()
+            for partition, committed_offset in committed.items():
+                if partition.topic in topics and committed_offset is not None:
+                    lag = max(0, int(latest.get(partition, 0)) - int(committed_offset.offset))
+                    kafka_consumer_lag.labels(group, partition.topic, str(partition.partition)).set(lag)
+            kafka_consumer_lag_available.labels(group).set(1)
+        except Exception:
+            kafka_consumer_lag_available.labels(group).set(0)
+            log.exception("Kafka consumer lag is unavailable for group %s", group)
     except Exception:
         kafka_up.set(0)
         log.exception("Kafka metrics collection failed")
@@ -202,6 +235,9 @@ def collect_airflow():
         for name in ("metadatabase", "scheduler", "triggerer", "dag_processor"):
             status = data.get(name, {}).get("status")
             heartbeat = data.get(name, {}).get("latest_scheduler_heartbeat") or data.get(name, {}).get("latest_dag_processor_heartbeat")
+            if name == "dag_processor" and status is None:
+                # Airflow 2.10 runs DAG parsing within the scheduler process.
+                heartbeat = data.get("scheduler", {}).get("latest_scheduler_heartbeat")
             healthy = status == "healthy" or (name in ("scheduler", "dag_processor") and heartbeat is not None)
             airflow_component_up.labels(name).set(1 if healthy else 0)
     except Exception:

@@ -395,6 +395,34 @@
           "rawSql": "SELECT id, bucket, object_name, operation, source_codec, target_codec, before_bytes, after_bytes, bytes_saved, status, created_at FROM object_optimization_history ORDER BY created_at DESC LIMIT 100"
         }
       ]
+    },
+    {
+      "id": 16,
+      "title": "Kafka consumer lag (records)",
+      "type": "timeseries",
+      "gridPos": {"x": 0, "y": 48, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "project_kafka_consumer_lag_records",
+          "legendFormat": "{{group}} / {{topic}} / {{partition}}"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "title": "Kafka consumer lag availability",
+      "type": "stat",
+      "gridPos": {"x": 12, "y": 48, "w": 6, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "project_kafka_consumer_lag_available",
+          "legendFormat": "{{group}}"
+        }
+      ]
     }
   ]
 }

@@ -1,5 +1,6 @@
 
 import json
+import hashlib
 import os
 import sys
 from datetime import datetime, timezone
@@ -16,8 +17,8 @@ from src.tiering.metadata import register_object
 
 SOURCE_DIR = PROJECT_ROOT / "data" / "streaming" / "orders"
 SPARK_METADATA_DIR = SOURCE_DIR / "_spark_metadata"
-BUCKET_NAME = "hot-data"
-OBJECT_PREFIX = "streaming/orders"
+BUCKET_NAME = os.getenv("STREAMING_BUCKET", "hot-data")
+OBJECT_PREFIX = os.getenv("STREAMING_OBJECT_PREFIX", "streaming/orders")
 
 
 def load_committed_files(metadata_dir, source_dir):
@@ -110,6 +111,48 @@ def create_minio_client():
     return client
 
 
+def sha256_file(file_path):
+    digest = hashlib.sha256()
+
+    with Path(file_path).open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+
+    return digest.hexdigest()
+
+
+def sha256_object(client, bucket, object_name):
+    response = client.get_object(bucket, object_name)
+
+    try:
+        digest = hashlib.sha256()
+        for chunk in response.stream(1024 * 1024):
+            digest.update(chunk)
+        return digest.hexdigest()
+    finally:
+        response.close()
+        response.release_conn()
+
+
+def verify_uploaded_file(client, bucket, object_name, file_path, expected_size):
+    metadata_key = f"{bucket}/{object_name}"
+    remote = client.stat_object(bucket, object_name)
+
+    if remote.size != expected_size:
+        raise RuntimeError(
+            f"MinIO size verification failed for {metadata_key}: "
+            f"local={expected_size}, remote={remote.size}"
+        )
+
+    local_hash = sha256_file(file_path)
+    remote_hash = sha256_object(client, bucket, object_name)
+
+    if local_hash != remote_hash:
+        raise RuntimeError(
+            f"MinIO SHA-256 verification failed for {metadata_key}"
+        )
+
+
 def upload_batch_file(client, file_path, batch_id):
     file_path = Path(file_path).resolve()
 
@@ -128,20 +171,8 @@ def upload_batch_file(client, file_path, batch_id):
     local_size = file_path.stat().st_size
 
     try:
-        existing_object = client.stat_object(
-            BUCKET_NAME,
-            object_name,
-        )
-
-        if existing_object.size != local_size:
-            raise RuntimeError(
-                f"Existing MinIO object has a different size: "
-                f"{metadata_key}; "
-                f"local={local_size}, remote={existing_object.size}"
-            )
-
+        client.stat_object(BUCKET_NAME, object_name)
         print(f"Already present; not overwritten: {metadata_key}")
-
     except S3Error as error:
         if error.code not in ("NoSuchKey", "NoSuchObject", "NotFound"):
             raise
@@ -153,17 +184,15 @@ def upload_batch_file(client, file_path, batch_id):
             content_type="application/octet-stream",
         )
 
-        uploaded_object = client.stat_object(
-            BUCKET_NAME,
-            object_name,
-        )
-
-        if uploaded_object.size != local_size:
-            raise RuntimeError(
-                f"Uploaded object size verification failed: {metadata_key}"
-            )
-
         print(f"Uploaded: {metadata_key}")
+
+    verify_uploaded_file(
+        client,
+        BUCKET_NAME,
+        object_name,
+        file_path,
+        local_size,
+    )
 
     register_object(
         object_key=metadata_key,
@@ -206,9 +235,8 @@ def upload_committed_files(client, committed_files, source_dir):
 
         try:
             client.stat_object(BUCKET_NAME, object_name)
-            already_present += 1
+            was_already_present = True
             print(f"Already present; not overwritten: {metadata_key}")
-
         except S3Error as error:
             if error.code not in ("NoSuchKey", "NoSuchObject", "NotFound"):
                 raise
@@ -220,9 +248,21 @@ def upload_committed_files(client, committed_files, source_dir):
                 content_type="application/octet-stream",
             )
 
-            client.stat_object(BUCKET_NAME, object_name)
-            uploaded += 1
+            was_already_present = False
             print(f"Uploaded: {metadata_key}")
+
+        verify_uploaded_file(
+            client,
+            BUCKET_NAME,
+            object_name,
+            file_path,
+            actual_size,
+        )
+
+        if was_already_present:
+            already_present += 1
+        else:
+            uploaded += 1
 
         modification_time_ms = record.get("modificationTime")
 

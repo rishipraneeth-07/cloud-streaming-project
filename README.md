@@ -33,7 +33,7 @@ Migration safety: copy -> size check -> SHA-256 check -> metadata update -> sour
 - **Apache Spark / PySpark:** batch transformations and Structured Streaming.
 - **MinIO:** S3-compatible object storage with hot, warm, and cold buckets.
 - **PostgreSQL:** object metadata, migration history, inventory, optimization history, and pipeline runs.
-- **Apache Airflow:** scheduled metadata initialization and tiering preview.
+- **Apache Airflow:** manual batch, controlled streaming, historical conversion, and tiering-preview DAGs.
 - **Prometheus:** scrapes service and pipeline metrics.
 - **Grafana:** operational dashboard and estimated storage-cost views.
 
@@ -43,7 +43,7 @@ Storage prices in `config/storage_costs.json` are illustrative estimates, not ac
 
 - Ubuntu 24.04 (or compatible Linux)
 - Docker Engine and Docker Compose plugin
-- Java 21
+- Java 21 for host Spark; Java 17 is installed in the Airflow image
 - Python 3.12
 - At least 8 GB RAM recommended for local Spark + Docker services
 
@@ -66,6 +66,8 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
+
+The project uses `kafka-python-ng==2.2.3` for producer and exporter clients. Do not install `kafka-python` into the same environment: both distributions install the same `kafka` import package. A clean virtual environment avoids that namespace collision.
 
 Check Java and Docker:
 
@@ -126,6 +128,10 @@ docker exec -i project-postgres sh -c \
 docker exec -i project-postgres sh -c \
   'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
   < sql/001_object_inventory.sql
+
+docker exec -i project-postgres sh -c \
+  'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  < sql/002_historical_conversion.sql
 ```
 
 The container receives `POSTGRES_*` variables from Compose. If your shell command does not see them, load `.env` first:
@@ -140,14 +146,15 @@ Run CSV -> Spark -> Parquet -> MinIO -> PostgreSQL metadata:
 
 ```bash
 source .venv/bin/activate
+set -a; source .env; set +a
 python -m src.batch.process_orders
 ```
 
-The job validates rows, creates `line_total`, writes order and product-summary Parquet datasets, uploads them under unique run-specific keys in `hot-data`, verifies object sizes, and registers trusted pipeline-creation timestamps.
+The job validates rows, creates `line_total`, writes Snappy-compressed order and product-summary Parquet datasets, uploads them under unique run-specific keys in `hot-data`, verifies object sizes, and registers trusted pipeline-creation timestamps. Local outputs are stored under run-specific directories so a later run does not overwrite existing results.
 
 Local Parquet output:
-- `data/processed/orders/`
-- `data/processed/product_summary/`
+- `data/processed/orders/run-<pipeline-run-id>/`
+- `data/processed/product_summary/run-<pipeline-run-id>/`
 
 ## 5. Streaming pipeline
 
@@ -159,23 +166,45 @@ docker exec project-kafka /opt/kafka/bin/kafka-topics.sh \
   --topic orders --partitions 1 --replication-factor 1
 ```
 
-Terminal 1 — start Spark Structured Streaming:
+Terminal 1 — start a controlled two-record Spark Structured Streaming run (omit the stop variables for a long-running service):
 
 ```bash
 source .venv/bin/activate
-python -m src.streaming.spark_streaming
+set -a; source .env; set +a
+STREAMING_STOP_AFTER_RECORDS=2 STREAMING_RUN_SECONDS=120 \
+  python -m src.streaming.spark_streaming
 ```
 
 Terminal 2 — send sample CSV orders to Kafka:
 
 ```bash
 source .venv/bin/activate
+set -a; source .env; set +a
 python -m src.streaming.producer
 ```
 
-The producer sends one event per second. Spark consumes the `orders` topic, validates events, writes Parquet micro-batches, and uploads committed output files to `hot-data`. Stop the streaming process with `Ctrl+C`.
+The producer sends one event per second by default. For a controlled producer run, limit the number of rows and set the delay to zero:
 
-## 6. Storage tiering
+```bash
+python -m src.streaming.producer --limit 2 --delay-seconds 0
+```
+
+Spark consumes the `orders` topic, validates events, writes Parquet micro-batches, and uploads committed output files to `hot-data`. Invalid events are stored as JSON under `hot-data/quarantine/orders/<topic>/partition-<n>/offset-<n>.json`; each object retains the original value, timestamp, Kafka identity, and failure reason. Kafka offsets are committed to the `orders-structured-streaming` consumer group only after valid output and quarantine writes are durable. Replayed quarantine records are checksum-verified and not rewritten.
+
+`STREAMING_OUTPUT_PATH`, `STREAMING_CHECKPOINT_PATH`, `STREAMING_OBJECT_PREFIX`, and `STREAMING_STARTING_OFFSETS=latest` can isolate a run. `STREAMING_STOP_AFTER_RECORDS` stops after a completed batch reaches its record target; `STREAMING_RUN_SECONDS` is a safety cap. Keep the checkpoint directory for recovery between restarts. Inspect quarantine JSON in the MinIO console or with `mc cat`.
+
+## 6. Historical MinIO conversion
+
+The conversion script defaults to a read-only preview of CSV files under `hot-data/legacy/`, targeting `warm-data/converted/historical/`:
+
+```bash
+set -a; source .env; set +a
+python scripts/convert_historical_minio_csv.py --source-prefix legacy/
+```
+
+After reviewing the listed objects, add `--apply` to convert with Spark and Snappy, compare source/output row counts and schemas, verify destination size and SHA-256, and record metadata in `historical_conversion_runs`. Source objects are retained. Existing destinations are reused only after checksum or logical Parquet verification; conflicting content fails without overwrite. Use the source/target bucket and prefix arguments to scope a run.
+
+## 7. Storage tiering
 
 The policy is in `config/tiering_rules.json`. The default is:
 
@@ -193,16 +222,18 @@ The policy is in `config/tiering_rules.json`. The default is:
 Preview metadata initialization (read-only):
 
 ```bash
+set -a; source .env; set +a
 python scripts/initialize_object_metadata.py
 ```
 
 Run the tiering preview:
 
 ```bash
+set -a; source .env; set +a
 python scripts/run_tiering_with_tracking.py
 ```
 
-The tiering engine only considers records whose original creation timestamp is confirmed. It verifies size and SHA-256 before deleting a source object. Keep `dry_run` set to `true` for the demo unless you intentionally approve a real migration after reviewing the preview.
+The tiering engine inventories configured buckets, skips missing buckets and missing metadata, and only considers records whose original creation timestamp is confirmed. It verifies size and SHA-256 before deleting a source object. The Airflow tiering task forces dry-run mode even if the local policy file is changed. For an explicitly approved manual migration, review the preview and set `TIERING_DRY_RUN=false` for the direct tiering command; never use that override in Airflow.
 
 The legacy helper is also safe by default:
 
@@ -212,15 +243,26 @@ python scripts/migrate_hot_to_warm.py
 
 It only previews. Real execution requires an explicit `--apply` flag; review the source and destination objects before using it.
 
-## 7. Airflow
+## 8. Airflow
 
-Build and start Airflow:
+Create the persistent Airflow home directory once, then build and start Airflow:
 
 ```bash
+mkdir -p data/airflow-home
+export AIRFLOW_UID="$(id -u)"
 docker compose -f docker-compose.airflow.yml up -d --build
 ```
 
-Open http://localhost:8080. The DAG is `cloud_storage_tiering`. It initializes missing metadata in preview mode and runs the tiering preview. It does not automatically move objects while `dry_run` is true.
+Airflow metadata and logs persist under `data/airflow-home/`, which is ignored by Git and excluded from the submission ZIP. The service joins the project Compose network. Its image installs Java 17; DAG tasks use the project `.venv` PySpark packages mounted read-only and Python 3.12.
+
+Open http://localhost:8080. Available manual DAGs:
+
+- `cloud_batch_processing`: service health check, then the existing batch Spark application.
+- `cloud_streaming_controlled_run`: consumes new Kafka events, writes isolated output/checkpoints, and stops after a completed batch reaches one record. Publish events after starting the DAG.
+- `cloud_historical_conversion`: applies the idempotent MinIO CSV conversion workflow.
+- `cloud_storage_tiering`: previews metadata initialization and tiering. The DAG always forces dry-run mode.
+
+All DAGs have execution timeouts and visible command failures. They do not run automatically on a schedule.
 
 ## 8. Monitoring
 
@@ -239,19 +281,20 @@ docker compose -f docker-compose.grafana.yml up -d
 Open:
 - Grafana: http://localhost:3000
 - Prometheus: http://localhost:9090
-- Exporter health: http://localhost:9105/health
 - Exporter metrics: http://localhost:9105/metrics
 - MinIO console: http://localhost:9001
 
 Grafana dashboard: **Cloud-Native Data Pipeline — Operations & Cost Optimization**.
 
-## 9. Tests and validation
+The exporter publishes `project_kafka_consumer_lag_records{group,topic,partition}` and `project_kafka_consumer_lag_available{group}`. Lag uses committed Kafka consumer-group offsets and broker partition end offsets. Availability is separate from the numeric lag, so an unavailable group or broker is not represented as zero lag. Grafana includes lag and availability panels.
 
-Run unit tests:
+## 10. Tests and validation
+
+Run the test suite (the migration integration tests use the configured PostgreSQL service):
 
 ```bash
 source .venv/bin/activate
-python -m unittest discover -s tests -v
+python -m pytest -v
 ```
 
 Run the policy test independently:
@@ -284,7 +327,7 @@ Check service health:
 docker compose -f docker-compose.kafka.yml ps
 docker compose -f docker-compose.postgres.yml ps
 curl -fsS http://localhost:9090/-/ready
-curl -fsS http://localhost:9105/health
+curl -fsS http://localhost:9105/metrics | head
 curl -fsS http://localhost:3000/api/health
 ```
 
@@ -301,7 +344,7 @@ docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" project-postgres \
   "SELECT bucket, COUNT(*) AS objects, SUM(size_bytes) AS bytes FROM object_inventory GROUP BY bucket ORDER BY bucket;"
 ```
 
-## 10. Stop services
+## 11. Stop services
 
 ```bash
 docker compose -f docker-compose.grafana.yml down
@@ -320,5 +363,8 @@ These commands stop containers but retain named volumes. Do not use `down -v` un
 - Do not enable real tiering until you have reviewed the eligible object list and verified backups.
 - Inventory synchronization is an observation/upsert process; it should not delete MinIO objects.
 - Storage-cost metrics are estimates based on configurable example rates.
-- Kafka topic count is not consumer lag or throughput.
+- Kafka lag is measured for the configured Spark consumer group; it does not represent application throughput.
+- The final verified streaming task is successful, but Airflow's log viewer currently returns HTTP 404 for its served attempt log. Kafka offsets, MinIO outputs, and PostgreSQL run metadata independently confirm the result.
+- If Prometheus reports targets `UP` but returns no recent samples because an older TSDB has out-of-window timestamps, the Compose config uses a separate `prometheus-data-recovered` volume and leaves the previous `prometheus-data` volume untouched.
+- The local filesystem was nearly full during verification; large workloads can fail until additional disk space is available.
 - A local demo proves the pipeline flow, not production-scale resilience or cloud-provider billing accuracy.

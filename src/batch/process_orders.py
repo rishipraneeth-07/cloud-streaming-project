@@ -170,11 +170,15 @@ def main():
             print("Product-wise revenue summary:")
             product_summary_df.show(truncate=False)
 
-            orders_output_path = ROOT_DIR / "data/processed/orders"
-            summary_output_path = ROOT_DIR / "data/processed/product_summary"
+            orders_output_path = (
+                ROOT_DIR / "data/processed/orders" / f"run-{run['id']}"
+            )
+            summary_output_path = (
+                ROOT_DIR / "data/processed/product_summary" / f"run-{run['id']}"
+            )
 
             orders_df.write \
-                .mode("overwrite") \
+                .option("compression", "snappy") \
                 .parquet(str(orders_output_path))
 
             orders_created_at = datetime.now(timezone.utc).isoformat()
@@ -182,7 +186,7 @@ def main():
             print("Orders saved to:", orders_output_path)
 
             product_summary_df.write \
-                .mode("overwrite") \
+                .option("compression", "snappy") \
                 .parquet(str(summary_output_path))
 
             summary_created_at = datetime.now(timezone.utc).isoformat()

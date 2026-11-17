@@ -1,6 +1,8 @@
 
 import csv
+import argparse
 import json
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,13 +11,35 @@ from kafka import KafkaProducer
 from kafka.errors import KafkaError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-CSV_FILE = PROJECT_ROOT / "data" / "sample" / "orders.csv"
+CSV_FILE = Path(os.getenv(
+    "ORDERS_CSV_FILE",
+    str(PROJECT_ROOT / "data" / "sample" / "orders.csv"),
+))
+BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+TOPIC = os.getenv("KAFKA_TOPIC", "orders")
 
-BOOTSTRAP_SERVERS = "localhost:9092"
-TOPIC = "orders"
 
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Publish order events to Kafka.")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Maximum number of CSV rows to send (useful for controlled runs).",
+    )
+    parser.add_argument(
+        "--delay-seconds",
+        type=float,
+        default=float(os.getenv("PRODUCER_DELAY_SECONDS", "1")),
+        help="Delay between events; set to 0 for a short controlled run.",
+    )
+    args = parser.parse_args(argv)
 
-def main():
+    if args.limit is not None and args.limit < 1:
+        parser.error("--limit must be greater than zero")
+    if args.delay_seconds < 0:
+        parser.error("--delay-seconds cannot be negative")
+
     if not CSV_FILE.exists():
         raise FileNotFoundError(f"CSV file not found: {CSV_FILE}")
 
@@ -33,6 +57,9 @@ def main():
             reader = csv.DictReader(file)
 
             for row in reader:
+                if args.limit is not None and sent_count >= args.limit:
+                    break
+
                 event = {
                     "order_id": int(row["order_id"]),
                     "product": row["product"],
@@ -54,7 +81,8 @@ def main():
                     print(f"Failed to send order {event['order_id']}: {error}")
                     raise
 
-                time.sleep(1)
+                if args.delay_seconds:
+                    time.sleep(args.delay_seconds)
 
         producer.flush()
         print(f"Finished. Successfully sent {sent_count} orders.")

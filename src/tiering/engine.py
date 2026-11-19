@@ -115,6 +115,7 @@ def migrate_object(client, source_bucket, object_name, target_bucket):
     )
 
     destination_created = False
+    destination_verified = False
     source_deleted = False
 
     try:
@@ -148,6 +149,8 @@ def migrate_object(client, source_bucket, object_name, target_bucket):
         if source_hash != destination_hash:
             raise RuntimeError("SHA-256 verification failed")
 
+        destination_verified = True
+
         preserve_object_metadata(source_key, destination_key)
 
         # Remove the source only after object and metadata verification.
@@ -166,9 +169,10 @@ def migrate_object(client, source_bucket, object_name, target_bucket):
         return True
 
     except Exception as error:
-        # Keep the destination if the source has already been deleted.
-        # It may be needed to recover a metadata/database failure.
-        if destination_created and not source_deleted:
+        # Remove only an incomplete copy. Once verified, retain the destination
+        # if metadata persistence or source deletion fails so both copies can
+        # be reconciled safely on retry.
+        if destination_created and not destination_verified and not source_deleted:
             try:
                 client.remove_object(target_bucket, object_name)
                 print(f"Removed incomplete destination: {destination_key}")
@@ -198,7 +202,16 @@ def preview_tiering():
     client = create_minio_client()
     metadata = load_object_metadata()
 
-    dry_run = rules.get("dry_run", True)
+    configured_dry_run = rules.get("dry_run", True)
+    dry_run_override = os.getenv("TIERING_DRY_RUN")
+    if dry_run_override is None:
+        dry_run = configured_dry_run
+    elif dry_run_override.lower() in ("true", "1", "yes"):
+        dry_run = True
+    elif dry_run_override.lower() in ("false", "0", "no"):
+        dry_run = False
+    else:
+        raise ValueError("TIERING_DRY_RUN must be a boolean")
 
     if not isinstance(dry_run, bool):
         raise ValueError("dry_run must be a boolean in tiering rules")
@@ -211,75 +224,93 @@ def preview_tiering():
     skipped = 0
     migrated = 0
 
-    for object_key, record in metadata.items():
-        if not isinstance(record, dict):
-            print(f"SKIP {object_key}: invalid metadata")
-            skipped += 1
-            continue
+    tiers = rules.get("tiers", {})
+    buckets = [
+        tier_config.get("bucket")
+        for tier_config in tiers.values()
+        if isinstance(tier_config, dict) and tier_config.get("bucket")
+    ]
 
-        if record.get("timestamp_is_original_creation_time") is not True:
-            print(f"SKIP {object_key}: creation timestamp is unconfirmed")
-            skipped += 1
-            continue
-
-        original_created_at = record.get("original_created_at")
-
-        if not original_created_at:
-            print(f"SKIP {object_key}: creation timestamp is missing")
-            skipped += 1
-            continue
-
+    for source_bucket in buckets:
         try:
-            age_days = calculate_age_days(original_created_at)
-        except (TypeError, ValueError) as error:
-            print(f"SKIP {object_key}: invalid creation timestamp: {error}")
-            skipped += 1
-            continue
-
-        parts = object_key.split("/", 1)
-
-        if len(parts) != 2:
-            print(f"SKIP {object_key}: invalid bucket-prefixed object key")
-            skipped += 1
-            continue
-
-        source_bucket, object_name = parts
-
-        try:
-            target_bucket = get_target_tier(
-                source_bucket,
-                age_days,
-                rules,
-            )
+            if not client.bucket_exists(source_bucket):
+                print(f"Skipping missing bucket: {source_bucket}")
+                skipped += 1
+                continue
+            objects = client.list_objects(source_bucket, recursive=True)
         except Exception as error:
-            print(f"SKIP {object_key}: tier policy error: {error}")
+            print(f"Skipping bucket {source_bucket}: could not list objects: {error}")
             skipped += 1
             continue
 
-        if not target_bucket or target_bucket == source_bucket:
-            skipped += 1
-            continue
+        for object_info in objects:
+            object_name = object_info.object_name
+            object_key = f"{source_bucket}/{object_name}"
+            record = metadata.get(object_key)
 
-        eligible += 1
+            if record is None:
+                print(f"SKIP {object_key}: metadata record is missing")
+                skipped += 1
+                continue
 
-        if dry_run:
-            print(
-                f"WOULD MIGRATE: {object_key} -> "
-                f"{target_bucket}/{object_name} "
-                f"(age: {age_days:.1f} days)"
-            )
-            continue
+            if not isinstance(record, dict):
+                print(f"SKIP {object_key}: invalid metadata")
+                skipped += 1
+                continue
 
-        try:
-            if migrate_object(
-                client,
-                source_bucket,
-                object_name,
-                target_bucket,
-            ):
-                migrated += 1
-        except Exception as error:
-            print(f"FAILED: {object_key}: {error}")
+            if record.get("timestamp_is_original_creation_time") is not True:
+                print(f"SKIP {object_key}: original creation time is not confirmed")
+                skipped += 1
+                continue
+
+            original_created_at = record.get("original_created_at")
+
+            if not original_created_at:
+                print(f"SKIP {object_key}: creation timestamp is missing")
+                skipped += 1
+                continue
+
+            try:
+                age_days = calculate_age_days(original_created_at)
+            except (TypeError, ValueError) as error:
+                print(f"SKIP {object_key}: invalid creation timestamp: {error}")
+                skipped += 1
+                continue
+
+            try:
+                target_bucket = get_target_tier(
+                    source_bucket,
+                    age_days,
+                    rules,
+                )
+            except Exception as error:
+                print(f"SKIP {object_key}: tier policy error: {error}")
+                skipped += 1
+                continue
+
+            if not target_bucket or target_bucket == source_bucket:
+                continue
+
+            eligible += 1
+
+            if dry_run:
+                print(
+                    f"WOULD MIGRATE: {object_key} -> "
+                    f"{target_bucket}/{object_name} "
+                    f"(age: {age_days:.1f} days)"
+                )
+                continue
+
+            try:
+                if migrate_object(
+                    client,
+                    source_bucket,
+                    object_name,
+                    target_bucket,
+                ):
+                    migrated += 1
+            except Exception as error:
+                print(f"FAILED: {object_key}: {error}")
 
     print("\nTiering summary")
     print(f"Eligible objects: {eligible}")

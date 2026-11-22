@@ -1,0 +1,19 @@
+groups:
+  - name: cloud-streaming-pipeline
+    rules:
+      - alert: KafkaConsumerLagHigh
+        expr: project_kafka_consumer_lag_records > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Kafka consumer group has sustained backlog
+          description: "{{ $labels.group }} is {{ $value }} records behind on {{ $labels.topic }} partition {{ $labels.partition }}."
+      - alert: KafkaConsumerLagUnavailable
+        expr: project_kafka_consumer_lag_available == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Kafka consumer lag could not be measured
+          description: "No committed offsets or broker response is available for consumer group {{ $labels.group }}."

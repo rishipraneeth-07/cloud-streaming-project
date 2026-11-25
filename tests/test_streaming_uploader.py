@@ -9,8 +9,23 @@ from minio.error import S3Error
 
 from scripts.upload_streaming_to_minio import (
     load_committed_files,
+    upload_batch_file,
     upload_committed_files,
 )
+
+
+class FakeResponse:
+    def __init__(self, content):
+        self.content = content
+
+    def stream(self, chunk_size):
+        yield self.content
+
+    def close(self):
+        pass
+
+    def release_conn(self):
+        pass
 
 
 class TestLoadCommittedFiles(unittest.TestCase):
@@ -188,9 +203,10 @@ class TestUploadCommittedFiles(unittest.TestCase):
         }
 
         self.client = Mock()
+        self.client.get_object.return_value = FakeResponse(b"x" * 100)
 
     def test_existing_object_is_not_overwritten(self):
-        self.client.stat_object.return_value = Mock()
+        self.client.stat_object.return_value = Mock(size=100)
 
         with patch(
             "scripts.upload_streaming_to_minio.register_object"
@@ -206,6 +222,23 @@ class TestUploadCommittedFiles(unittest.TestCase):
 
         self.assertEqual(summary["uploaded"], 0)
         self.assertEqual(summary["already_present"], 1)
+
+    def test_same_size_existing_object_with_different_content_fails(self):
+        self.client.stat_object.return_value = Mock(size=100)
+        self.client.get_object.return_value = FakeResponse(b"y" * 100)
+
+        with patch(
+            "scripts.upload_streaming_to_minio.register_object"
+        ) as register:
+            with self.assertRaisesRegex(RuntimeError, "SHA-256 verification"):
+                upload_committed_files(
+                    self.client,
+                    {self.file_path: self.record},
+                    self.source_dir,
+                )
+
+        self.client.fput_object.assert_not_called()
+        register.assert_not_called()
 
     def test_missing_local_file_is_skipped(self):
         missing_file = self.source_dir / "missing.parquet"
@@ -250,7 +283,7 @@ class TestUploadCommittedFiles(unittest.TestCase):
 
         self.client.stat_object.side_effect = [
             missing_error,
-            Mock(),
+            Mock(size=100),
         ]
 
         with patch(
@@ -274,6 +307,28 @@ class TestUploadCommittedFiles(unittest.TestCase):
             kwargs["timestamp_source"],
             "spark_modification_time_unconfirmed",
         )
+
+    def test_upload_batch_file_verifies_size_and_checksum(self):
+        missing_error = S3Error(
+            None,
+            "NoSuchKey",
+            "Object not found",
+            "resource",
+            "request-id",
+            "host-id",
+        )
+        self.client.stat_object.side_effect = [missing_error, Mock(size=100)]
+
+        with patch(
+            "scripts.upload_streaming_to_minio.register_object"
+        ) as register:
+            object_key = upload_batch_file(self.client, self.file_path, 12)
+
+        self.assertTrue(object_key.endswith("/batches/batch-12.parquet"))
+        self.client.fput_object.assert_called_once()
+        self.assertEqual(self.client.stat_object.call_count, 2)
+        self.client.get_object.assert_called_once()
+        register.assert_called_once()
 
 
     def test_unexpected_minio_error_is_propagated(self):

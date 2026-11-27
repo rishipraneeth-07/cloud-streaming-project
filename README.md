@@ -356,15 +356,3 @@ docker compose -f docker-compose.kafka.yml down
 
 These commands stop containers but retain named volumes. Do not use `down -v` unless you intentionally want to delete persisted database, Kafka, Grafana, or Prometheus data.
 
-## Safety and limitations
-
-- Never commit `.env` or credentials.
-- Tier migration is preview-only by default.
-- Do not enable real tiering until you have reviewed the eligible object list and verified backups.
-- Inventory synchronization is an observation/upsert process; it should not delete MinIO objects.
-- Storage-cost metrics are estimates based on configurable example rates.
-- Kafka lag is measured for the configured Spark consumer group; it does not represent application throughput.
-- The final verified streaming task is successful, but Airflow's log viewer currently returns HTTP 404 for its served attempt log. Kafka offsets, MinIO outputs, and PostgreSQL run metadata independently confirm the result.
-- If Prometheus reports targets `UP` but returns no recent samples because an older TSDB has out-of-window timestamps, the Compose config uses a separate `prometheus-data-recovered` volume and leaves the previous `prometheus-data` volume untouched.
-- The local filesystem was nearly full during verification; large workloads can fail until additional disk space is available.
-- A local demo proves the pipeline flow, not production-scale resilience or cloud-provider billing accuracy.
